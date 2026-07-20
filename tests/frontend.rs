@@ -15,6 +15,41 @@ fn ok(src: &str) -> applows::CompileResult {
 }
 
 #[test]
+fn newline_in_string_powershell_safe() {
+    // 改行を含む文字列: PS の single-quoted は複数行不可なので [char]10 へ退避する
+    let r = ok("print \"line1\\nline2\"\n");
+    // sh は single quote に生 LF を含められる
+    assert!(
+        r.sh_payload.contains("'line1\nline2'"),
+        "sh:\n{}",
+        r.sh_payload
+    );
+    // PS 側の文字列に生 LF が single quote 内で現れてはならない
+    assert!(r.ps_payload.contains("[char]10"), "ps:\n{}", r.ps_payload);
+    for line in r.ps_payload.lines() {
+        // 各行内で開いた single quote がその行で閉じている (複数行 single-quoted が無い)
+        let single_quotes = line.matches('\'').count();
+        assert!(
+            single_quotes.is_multiple_of(2),
+            "PS 行内で single quote が閉じていない: {line}"
+        );
+    }
+}
+
+#[test]
+fn cr_in_string_no_raw_cr_in_output() {
+    // CR は verify の CR 禁止に触れないよう退避され、コンパイルが通る
+    let r = ok("print \"a\\rb\"\n");
+    assert!(!r.output.contains('\r'), "出力に生 CR があってはならない");
+    assert!(
+        r.sh_payload.contains("printf '\\r'"),
+        "sh:\n{}",
+        r.sh_payload
+    );
+    assert!(r.ps_payload.contains("[char]13"), "ps:\n{}", r.ps_payload);
+}
+
+#[test]
 fn string_escapes() {
     // \n \t \\ \" \{ \} が正しくリテラル化される
     let r = ok("print \"a\\tb\\nc \\\\ \\\" \\{x\\}\"\n");

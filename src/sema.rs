@@ -286,18 +286,37 @@ impl Lowerer {
                     otherwise,
                 }))
             }
-            Stmt::While { cond, body, .. } => {
+            Stmt::While { cond, body, span } => {
                 let cond = self.lower_cond(cond, scope, fn_index, false)?;
                 // ループ本体はクローン上で処理し、代入された変数は while 後 diverged 扱いにする
                 // (0 回実行の可能性があるため、本体で作られた型を後段で当てにできない)
                 let before = scope.clone();
                 let mut body_scope = before.clone();
                 let body = self.lower_block(body, &mut body_scope, fn_index, false);
+                // ループ不変条件: 条件は毎周評価されるが型検査は本体前の型で 1 回だけ行うため、
+                // 本体が条件で使う変数の型を変えると 2 周目以降に破綻する。これを禁止する。
+                let mut cond_slots = std::collections::HashSet::new();
+                collect_cond_var_slots(&cond, &mut cond_slots);
+                for (name, info) in &before.vars {
+                    if cond_slots.contains(&info.slot)
+                        && let Some(after) = body_scope.vars.get(name)
+                        && after.ty != info.ty
+                    {
+                        return Err(Diagnostic::error(
+                            format!("while の本体が条件で使う変数 `{name}` の型を変えています"),
+                            *span,
+                        )
+                        .with_note("ループ条件で使う変数の型は毎周一定である必要がある"));
+                    }
+                }
                 *scope = merge_branch_scopes(&before, &[body_scope, before.clone()]);
                 Ok(Some(IrStmt::While { cond, body }))
             }
             Stmt::For {
-                var, iter, body, ..
+                var,
+                iter,
+                body,
+                span,
             } => {
                 // ループは 0 回実行され得る (空リスト / start>end) ため、本体はクローン上で
                 // 処理し、本体で作られた型を while と同様に合流時 diverged 扱いにする。
@@ -311,6 +330,18 @@ impl Lowerer {
                         let mut body_scope = before.clone();
                         let slot = self.declare_loop_var(var, Type::Int, &mut body_scope);
                         let body = self.lower_block(body, &mut body_scope, fn_index, false);
+                        // レンジのループ変数は毎周 i=i+1 で更新されるため、本体が Int 以外へ
+                        // 変えると破綻する。これを禁止する。
+                        if let Some(after) = body_scope.vars.get(var)
+                            && after.ty != Type::Int
+                        {
+                            return Err(Diagnostic::error(
+                                format!(
+                                    "for の本体がループ変数 `{var}` の型を変えています (Int を保つ必要があります)"
+                                ),
+                                *span,
+                            ));
+                        }
                         (
                             IrStmt::ForRange {
                                 var: slot,
@@ -899,6 +930,59 @@ fn string_literal_text(expr: &Expr) -> Option<String> {
         Some(out)
     } else {
         None
+    }
+}
+
+/// 条件が参照する変数 slot を集める (ループ不変条件の検査用)。
+fn collect_cond_var_slots(cond: &Cond, out: &mut std::collections::HashSet<String>) {
+    match cond {
+        Cond::Cmp { left, right, .. } => {
+            collect_value_var_slots(left, out);
+            collect_value_var_slots(right, out);
+        }
+        Cond::And(a, b) | Cond::Or(a, b) => {
+            collect_cond_var_slots(a, out);
+            collect_cond_var_slots(b, out);
+        }
+        Cond::Not(a) => collect_cond_var_slots(a, out),
+        Cond::Test { args, .. } => {
+            for a in args {
+                collect_value_var_slots(a, out);
+            }
+        }
+    }
+}
+
+/// 値が参照する変数 slot を集める。
+fn collect_value_var_slots(v: &Value, out: &mut std::collections::HashSet<String>) {
+    match v {
+        Value::Var(s) => {
+            out.insert(s.clone());
+        }
+        Value::Str(parts) => {
+            for p in parts {
+                if let ir::StrPart::Var(s) = p {
+                    out.insert(s.clone());
+                }
+            }
+        }
+        Value::Arith { left, right, .. } => {
+            collect_value_var_slots(left, out);
+            collect_value_var_slots(right, out);
+        }
+        Value::Run { argv } => {
+            if let List::Literal(items) = argv {
+                for it in items {
+                    collect_value_var_slots(it, out);
+                }
+            }
+        }
+        Value::Builtin { args, .. } | Value::Call { args, .. } => {
+            for a in args {
+                collect_value_var_slots(a, out);
+            }
+        }
+        Value::Int(_) => {}
     }
 }
 

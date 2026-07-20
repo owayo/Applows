@@ -270,6 +270,22 @@ fn loop_variable_not_usable_after_loop() {
 }
 
 #[test]
+fn while_body_cannot_retype_condition_var() {
+    // 条件は毎周評価されるため、本体で条件変数の型を変えると破綻する → 禁止
+    err_contains(
+        "let n = 3\nwhile n > 0 {\n  let n = \"x\"\n}\n",
+        "条件で使う変数",
+    );
+    ok("let n = 3\nwhile n > 0 {\n  let n = n - 1\n}\n");
+}
+
+#[test]
+fn for_range_body_cannot_retype_loop_var() {
+    err_contains("for i in 1 to 3 {\n  let i = \"x\"\n}\n", "ループ変数");
+    ok("for i in 1 to 3 {\n  let i = i + 10\n}\n");
+}
+
+#[test]
 fn args_only_at_top_level() {
     err_contains(
         "fn f() {\n  let x = arg(1)\n  return 0\n}\nf()\n",

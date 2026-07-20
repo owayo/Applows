@@ -11,7 +11,7 @@
 
 use crate::ast::{ArithOp, CmpOp};
 use crate::builtins::Builtin;
-use crate::emit::escape::ps_squote;
+use crate::emit::escape::ps_lit;
 use crate::ir::{Cond, IrFunc, IrProgram, IrStmt, List, StrPart, Value};
 
 pub fn emit_powershell(program: &IrProgram) -> String {
@@ -462,19 +462,18 @@ fn render_str(parts: &[StrPart]) -> String {
     if parts.is_empty() {
         return "''".to_string();
     }
-    if parts.len() == 1 {
-        return match &parts[0] {
-            StrPart::Lit(s) => ps_squote(s),
-            StrPart::Var(v) => format!("[string]${v}"),
-        };
-    }
     let terms: Vec<String> = parts
         .iter()
         .map(|p| match p {
-            StrPart::Lit(s) => ps_squote(s),
+            StrPart::Lit(s) => ps_lit(s),
             StrPart::Var(v) => format!("[string]${v}"),
         })
         .collect();
+    // 単一かつ内部に連結 (` + `) を含まない項はそのまま返す。それ以外は必ず括弧で
+    // 包む (argv `& cmd (...)` やメソッド引数で `+` が別トークンに割れるのを防ぐ)。
+    if terms.len() == 1 && !terms[0].contains(" + ") {
+        return terms.into_iter().next().unwrap();
+    }
     format!("({})", terms.join(" + "))
 }
 

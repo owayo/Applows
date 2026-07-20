@@ -8,7 +8,7 @@
 
 use crate::ast::{ArithOp, CmpOp};
 use crate::builtins::Builtin;
-use crate::emit::escape::sh_squote;
+use crate::emit::escape::sh_lit;
 use crate::ir::{Cond, IrFunc, IrProgram, IrStmt, List, StrPart, Value};
 
 pub fn emit_sh(program: &IrProgram) -> String {
@@ -463,7 +463,7 @@ fn render_str(parts: &[StrPart]) -> String {
     let mut out = String::new();
     for part in parts {
         match part {
-            StrPart::Lit(s) => out.push_str(&sh_squote(s)),
+            StrPart::Lit(s) => out.push_str(&sh_lit(s)),
             StrPart::Var(v) => out.push_str(&format!("\"${{{v}}}\"")),
         }
     }
