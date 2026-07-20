@@ -334,18 +334,8 @@ impl Lowerer {
                         let mut body_scope = before.clone();
                         let slot = self.declare_loop_var(var, Type::Int, &mut body_scope);
                         let body = self.lower_block(body, &mut body_scope, fn_index, false);
-                        // レンジのループ変数は毎周 i=i+1 で更新されるため、本体が Int 以外へ
-                        // 変えると破綻する。これを禁止する。
-                        if let Some(after) = body_scope.vars.get(var)
-                            && after.ty != Type::Int
-                        {
-                            return Err(Diagnostic::error(
-                                format!(
-                                    "for の本体がループ変数 `{var}` の型を変えています (Int を保つ必要があります)"
-                                ),
-                                *span,
-                            ));
-                        }
+                        // ループ変数は隠しカウンタから毎周代入されるため、本体での再代入は
+                        // 反復に影響しない (次周で上書き)。よって型変更のチェックは不要。
                         (
                             IrStmt::ForRange {
                                 var: slot,

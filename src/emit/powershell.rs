@@ -129,13 +129,17 @@ impl Ps {
                 let s = self.materialize(start, &mut pre);
                 let en = self.materialize(end, &mut pre);
                 self.emit_pre(&pre);
+                // 反復は隠しカウンタで制御し、ループ変数は毎周それから代入する
+                // (本体がループ変数を書き換えても反復は壊れない: sh 側と同じ意味論)。
+                let counter = self.fresh_temp();
                 let end_tmp = self.fresh_temp();
-                self.line(&format!("${var} = {s}"));
+                self.line(&format!("{counter} = {s}"));
                 self.line(&format!("{end_tmp} = {en}"));
-                self.line(&format!("while (${var} -le {end_tmp}) {{"));
+                self.line(&format!("while ({counter} -le {end_tmp}) {{"));
                 self.indent += 1;
+                self.line(&format!("${var} = {counter}"));
                 self.emit_stmts(body);
-                self.line(&format!("${var} = ${var} + 1"));
+                self.line(&format!("{counter} = {counter} + 1"));
                 self.indent -= 1;
                 self.line("}");
             }

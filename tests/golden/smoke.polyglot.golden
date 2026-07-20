@@ -19,11 +19,12 @@ printf '%s\n' 'smoke start'
 __ap_v1="$#"
 printf '%s\n' 'argc='"${__ap_v1}"
 __ap_v2=0
-__ap_v3=1
-__ap_t0=5
-while [ "$__ap_v3" -le "$__ap_t0" ]; do
+__ap_t0=1
+__ap_t1=5
+while [ "$__ap_t0" -le "$__ap_t1" ]; do
+  __ap_v3="$__ap_t0"
   __ap_v2="$((__ap_v2 + __ap_v3))"
-  __ap_v3=$((__ap_v3 + 1))
+  __ap_t0=$((__ap_t0 + 1))
 done
 printf '%s\n' 'sum='"${__ap_v2}"
 if [ "${__ap_v2}" -eq 15 ]; then
@@ -54,11 +55,12 @@ try {
   $__ap_v1 = $__ap_args.Count
   [Console]::Out.WriteLine(('argc=' + [string]$__ap_v1))
   $__ap_v2 = 0
-  $__ap_v3 = 1
-  $__ap_t0 = 5
-  while ($__ap_v3 -le $__ap_t0) {
+  $__ap_t0 = 1
+  $__ap_t1 = 5
+  while ($__ap_t0 -le $__ap_t1) {
+    $__ap_v3 = $__ap_t0
     $__ap_v2 = ([long]$__ap_v2 + [long]$__ap_v3)
-    $__ap_v3 = $__ap_v3 + 1
+    $__ap_t0 = $__ap_t0 + 1
   }
   [Console]::Out.WriteLine(('sum=' + [string]$__ap_v2))
   if (([long]$__ap_v2 -eq [long]15)) {

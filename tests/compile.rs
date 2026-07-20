@@ -319,9 +319,23 @@ fn while_body_cannot_retype_condition_var() {
 }
 
 #[test]
-fn for_range_body_cannot_retype_loop_var() {
-    err_contains("for i in 1 to 3 {\n  let i = \"x\"\n}\n", "ループ変数");
+fn for_range_loop_var_reassign_is_safe() {
+    // 隠しカウンタで反復するため、本体でループ変数を書き換えても反復は壊れない (Python 同様)。
+    // 別型への再代入も許容 (次周でカウンタから再代入)。
+    ok("for i in 1 to 3 {\n  let i = \"x\"\n}\n");
     ok("for i in 1 to 3 {\n  let i = i + 10\n}\n");
+    // 反復が隠しカウンタ (__ap_t*) で駆動され、ループ変数の増分が現れない
+    let r = compile("for i in 1 to 2 {\n  print \"{i}\"\n}\n").expect("compiles");
+    assert!(
+        !r.sh_payload.contains("__ap_v0 + 1"),
+        "ループ変数を直接増分してはならない:\n{}",
+        r.sh_payload
+    );
+    assert!(
+        r.sh_payload.contains("+ 1))"),
+        "隠しカウンタの増分が必要:\n{}",
+        r.sh_payload
+    );
 }
 
 #[test]

@@ -89,6 +89,16 @@ fn while_countdown() {
 }
 
 #[test]
+fn for_range_loop_var_reassign_is_finite() {
+    // ループ変数を本体で書き換えても隠しカウンタで反復するため無限ループにならない
+    let src = "for i in 1 to 3 {\n  print \"iter={i}\"\n  let i = 0\n}\nprint \"done\"\n";
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(out, "iter=1\niter=2\niter=3\ndone\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn args_and_utf8() {
     let src = "let n = argc()\nprint \"n={n}\"\nfor a in args() {\n  print \"a={a}\"\n}\n";
     let script = build_temp(src);
