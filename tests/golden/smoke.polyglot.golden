@@ -3,9 +3,11 @@ function REM() { return; }
 REM @'
 REM '; : << 'APPLOWS_BATCH'
 @echo off
+setlocal DisableDelayedExpansion
 set "APPLOWS_SELF=%~f0"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$u=New-Object System.Text.UTF8Encoding $false; $s=[System.IO.File]::ReadAllText($env:APPLOWS_SELF,$u); $b=[ScriptBlock]::Create($s); & $b @args; exit $LASTEXITCODE" %*
-exit /b %ERRORLEVEL%
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "try { $v=[Environment]::GetCommandLineArgs(); $a=@(); if($v.Length -gt 6){$a=@($v[6..($v.Length-1)])}; $u=New-Object System.Text.UTF8Encoding $false; $s=[System.IO.File]::ReadAllText($env:APPLOWS_SELF,$u); $b=[ScriptBlock]::Create($s); & $b @a; exit 0 } catch { [Console]::Error.WriteLine($_); exit 1 } #" %*
+set "__ap_rc=%ERRORLEVEL%"
+endlocal & exit /b %__ap_rc%
 APPLOWS_BATCH
 # ==== Applows sh payload (macOS /bin/sh + zsh) ====
 __ap_f0() {

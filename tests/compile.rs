@@ -200,6 +200,11 @@ fn function_cannot_see_globals() {
 }
 
 #[test]
+fn empty_run_argv_rejected() {
+    err_contains("let c = run([])\n", "空にできません");
+}
+
+#[test]
 fn args_only_at_top_level() {
     err_contains(
         "fn f() {\n  let x = arg(1)\n  return 0\n}\nf()\n",

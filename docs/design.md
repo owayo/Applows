@@ -137,8 +137,11 @@ function REM() { return; }
 REM @'
 REM '; : << 'APPLOWS_BATCH'
 @echo off
-<< Batch セクション: 自己パスを APPLOWS_SELF に束縛し、UTF-8 で自身を再読込して PowerShell 実行 >>
-exit /b %ERRORLEVEL%
+setlocal DisableDelayedExpansion
+set "APPLOWS_SELF=%~f0"
+"%SystemRoot%\...\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "try { <引数を GetCommandLineArgs で取得>; <UTF-8 で自身を再読込>; & $b @a; exit 0 } catch { ...; exit 1 } #" %*
+set "__ap_rc=%ERRORLEVEL%"
+endlocal & exit /b %__ap_rc%
 APPLOWS_BATCH
 << sh ペイロード >>
 exit 0
@@ -155,7 +158,12 @@ exit 0
 1. **自己パス**: Batch が `set "APPLOWS_SELF=%~f0"` で束縛し、環境変数として PowerShell へ渡す。`$PSScriptRoot`/`$PSCommandPath` は `iex`/`ScriptBlock` 経由で空になるため依存しない。
 2. **UTF-8 自己再読込**: `Get-Content` は BOM 無し UTF-8 を UTF-8 と読まない場合があり日本語が壊れる。`[System.IO.File]::ReadAllText($env:APPLOWS_SELF, (New-Object System.Text.UTF8Encoding $false))` + `[ScriptBlock]::Create` を使う。
 3. **BOM 無し UTF-8 / LF 固定**: 出力は必ず BOM 無し UTF-8・LF。出力直後に再読込して検査。`.gitattributes` で変換禁止。
-4. **引数転送**: Batch `%*` → powershell の `$args` → 再読込スクリプトブロックへ `@args` 転送。cmd のクォート解釈上、`%` `!` `&` 等の一部文字は制限として仕様に明記 (E2E で安全な範囲を固定)。
+4. **引数転送** (Codex レビューで罠を確定・修正): `powershell -Command "..." %*` では **`%*` は `$args` にならず**、PowerShell 5.1 の仕様上コマンド文字列末尾へ連結される (公式仕様)。そのため素朴な実装は「引数なしは動くが引数ありは構文破壊」する。対策として、
+   - ネイティブのプロセス引数を `[Environment]::GetCommandLineArgs()` で取得 (固定フラグ構成なので index 6 以降がユーザ引数)。UTF-16 で保持されるため日本語も安全。
+   - `-Command` 文字列末尾の `#` で、PowerShell が連結してくる `%*` をコメント化し二次評価 (`$env:X` / `$(...)` の展開) を防ぐ。
+   - `setlocal DisableDelayedExpansion` で引数中の `!` 消失を防止。
+   - `powershell.exe` をフルパス (`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`) で起動し 5.1 を明示。
+   - なお `%*` は cmd.exe を再通過するため、不均衡な `"`・未引用の `& | < >`・改行を含む引数は依然制限として仕様に明記する。
 5. **明示的 exit code**: `$LASTEXITCODE` に依存せず、runtime で `$__ap_status` を管理し `exit [int]$__ap_status`。Batch も `exit /b %ERRORLEVEL%`。
 
 ### Verify (構造検査)

@@ -505,6 +505,14 @@ impl Lowerer {
                 return Err(self.arity_err(builtin, args.len(), span));
             }
             let argv = self.lower_list(&args[0], scope, fn_index)?;
+            if let List::Literal(items) = &argv
+                && items.is_empty()
+            {
+                return Err(
+                    Diagnostic::error("`run([])` の argv は空にできません", span)
+                        .with_note("先頭要素は実行するコマンド名にする: run([\"cmd\", ...])"),
+                );
+            }
             return Ok(Value::Run { argv });
         }
 

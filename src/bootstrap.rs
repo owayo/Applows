@@ -23,12 +23,21 @@ pub fn assemble(sh_payload: &str, ps_payload: &str) -> String {
     out.push_str(BATCH_DELIM);
     out.push_str("'\n");
     // --- Batch セクション ---
+    // 引数転送は Codex レビューで判明した罠を回避する実装:
+    //   `powershell -Command "..." %*` では %* が $args にならず、PowerShell が
+    //   コマンド文字列末尾へ連結してしまう ("two words" で構文破壊)。
+    // 対策: ネイティブのプロセス引数を [Environment]::GetCommandLineArgs() で取得し
+    //   (index 6 以降がユーザ引数)、コマンド末尾の `#` で連結される %* をコメント化する。
+    //   さらに setlocal DisableDelayedExpansion で引数中の `!` 消失を防ぎ、
+    //   powershell.exe をフルパス起動、bootstrap 自体を try/catch で保護する。
     out.push_str("@echo off\n");
+    out.push_str("setlocal DisableDelayedExpansion\n");
     out.push_str("set \"APPLOWS_SELF=%~f0\"\n");
     out.push_str(
-        "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$u=New-Object System.Text.UTF8Encoding $false; $s=[System.IO.File]::ReadAllText($env:APPLOWS_SELF,$u); $b=[ScriptBlock]::Create($s); & $b @args; exit $LASTEXITCODE\" %*\n",
+        "\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -Command \"try { $v=[Environment]::GetCommandLineArgs(); $a=@(); if($v.Length -gt 6){$a=@($v[6..($v.Length-1)])}; $u=New-Object System.Text.UTF8Encoding $false; $s=[System.IO.File]::ReadAllText($env:APPLOWS_SELF,$u); $b=[ScriptBlock]::Create($s); & $b @a; exit 0 } catch { [Console]::Error.WriteLine($_); exit 1 } #\" %*\n",
     );
-    out.push_str("exit /b %ERRORLEVEL%\n");
+    out.push_str("set \"__ap_rc=%ERRORLEVEL%\"\n");
+    out.push_str("endlocal & exit /b %__ap_rc%\n");
     out.push_str(BATCH_DELIM);
     out.push('\n');
     // --- sh ペイロード (macOS) ---
