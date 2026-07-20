@@ -163,7 +163,7 @@ REM or from a PowerShell prompt
 .\hello.bat
 ```
 
-A complete, runnable tour of the language lives in [examples/tour.aplo](examples/tour.aplo).
+A complete, runnable tour of the language lives in [examples/tour.aplo](examples/tour.aplo). More runnable examples: [examples/greet.aplo](examples/greet.aplo) (control flow & functions), [examples/fileops.aplo](examples/fileops.aplo) (file operations), [examples/provision.aplo](examples/provision.aplo) (provisioning checks).
 
 ## Language overview
 
@@ -210,7 +210,7 @@ Rules worth knowing:
 
 | Category | Built-ins | Notes |
 |---|---|---|
-| Output | `print`, `println` | interpolation: `print "hello, {name}!"` |
+| Output | `print` (statement) | interpolation: `print "hello, {name}!"` |
 | Arguments & environment | `args()`, `arg(i)`, `argc()`, `env(name, default)` | |
 | Processes | `run(argv)` | argv as a `List`; returns the exit code (`Int`) |
 | Filesystem | `exists`, `is_file`, `is_dir`, `read_text`, `write_text`, `append_text`, `copy`, `remove` | `write_text` is atomic (temp file + move) |
@@ -218,7 +218,7 @@ Rules worth knowing:
 | Text | `upper`, `lower`, `trim` | |
 | Script location | `script_path()`, `script_dir()`, `cwd()` | |
 
-The full grammar, type rules, and per-target mappings are specified in [docs/design.md](docs/design.md).
+The full grammar, type rules, and per-target mappings are specified in [docs/design.md](docs/design.md). A complete user-facing language reference (Japanese) is available in [docs/language.md](docs/language.md).
 
 ## Limitations (MVP)
 

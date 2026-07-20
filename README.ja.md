@@ -210,7 +210,7 @@ greet("team")
 
 | カテゴリ | 組み込み | 備考 |
 |---|---|---|
-| 出力 | `print`, `println` | 補間: `print "hello, {name}!"` |
+| 出力 | `print` (文) | 補間: `print "hello, {name}!"` |
 | 引数・環境変数 | `args()`, `arg(i)`, `argc()`, `env(name, default)` | |
 | プロセス | `run(argv)` | argv は `List`。終了コード (`Int`) を返す |
 | ファイルシステム | `exists`, `is_file`, `is_dir`, `read_text`, `write_text`, `append_text`, `copy`, `remove` | `write_text` はアトミック (一時ファイル + move) |
