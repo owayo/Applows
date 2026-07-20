@@ -70,7 +70,6 @@ let name = "world"          # 変数宣言/再代入
 let count = 3
 
 print "Hello, {name}!"      # 補間付き出力 (改行あり)
-println("explicit call form も可")
 
 if count > 2 and exists("/tmp") {
     print "big"
@@ -112,7 +111,7 @@ exit 0
 
 | 関数 | 引数 | 戻り | sh | PowerShell |
 |---|---|---|---|---|
-| `print` / `println` | Text | — | `printf '%s\n'` | `[Console]::Out.WriteLine` |
+| `print` (文) | Text | — | `printf '%s\n'` | `[Console]::Out.WriteLine` |
 | `env(name, default)` | Text, Text | Text | `${NAME:-default}` | `$env:NAME` ?? default |
 | `args()` / `arg(i)` / `argc()` | — / Int / — | List/Text/Int | `$@` / `$1` / `$#` | `$__ap_args` |
 | `run(list)` | List | Int(終了コード) | argv を quote して実行 | `& argv[0] argv[1..]` |
@@ -208,3 +207,17 @@ exit 0
 
 Windows 側 (Batch + Windows PowerShell 5.1) は CI (`windows-latest`) の E2E で検証する。
 4. **実 OS E2E**: GitHub Actions `windows-latest` (Windows PowerShell 5.1 明示) + `macos-latest`。引数 (空/空白/日本語/記号)、環境変数、相対パス、自己ディレクトリ、ファイル読み書き、非ゼロ終了、stdout/stderr を検証。
+
+## クロス OS レビューで確認した既知の挙動差 (codex/grok/コードレビュー)
+
+複数 AI による全体レビューで、以下は「実バグ」として修正済み: env 名インジェクション、if/else の型発散、複合条件の副作用非短絡、`arg(0)`、重複パラメータ、ループ不変条件の破れ、for-each 要素の副作用消失、PowerShell 整数除算 (`/` が浮動小数)、存在しないコマンドの終了コード (sh=127 / PS 例外→両者 127 に統一)、`remove` の欠損ファイル扱い、改行を含む文字列の PowerShell 生成 (`[char]10`)、`\r` の verify 衝突。
+
+以下は現時点で**仕様上の既知の制限**として残す (MVP スコープ外 / 全 OS 一致には追加設計が必要):
+
+| 項目 | 挙動 | 対処 |
+|---|---|---|
+| `read_text` / `upper` / `lower` / `trim` の末尾改行 | sh はコマンド置換 `$()` が末尾改行を除去、PowerShell は保持 | 末尾改行に依存しない使い方をする。将来 sentinel 方式で統一予定 |
+| `exit` / `return` の終了コード範囲 | Unix の終了コードは 0–255 (8bit)。256 以上は sh で剰余に丸められ、PowerShell とずれる | 終了コードは 0–255 に収める |
+| `run(args())` の引数 0 個 | sh は直前の `$?`、PowerShell は 0 個ガードで実行しない | 実行前に `argc()` で確認する |
+| `write_text` / `append_text` / `copy` / `read_text` の失敗 | PowerShell は `$ErrorActionPreference='Stop'` で致命 (exit 1)、sh は継続し得る | 失敗し得る操作は事前に `exists()` で確認する。将来両 OS で致命に統一予定 |
+| 除算のゼロ割 / オーバーフロー | sh と PowerShell でエラー形態が異なる | ゼロ割を避ける |

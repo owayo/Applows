@@ -237,6 +237,45 @@ fn consistent_branch_types_ok() {
 }
 
 #[test]
+fn new_var_defined_in_all_branches_ok() {
+    // 仕様の基本パターン: 両分岐で新規変数を同じ型で定義 → if の後で使える
+    ok("if 1 == 1 {\n  let state = \"a\"\n} else {\n  let state = \"b\"\n}\nprint \"{state}\"\n");
+}
+
+#[test]
+fn new_var_defined_in_only_one_branch_diverges() {
+    // else 無しで片方の分岐でしか定義しない変数は後段で使えない
+    err_contains(
+        "if 1 == 1 {\n  let only = \"x\"\n}\nprint \"{only}\"\n",
+        "定まらない",
+    );
+}
+
+#[test]
+fn for_each_side_effect_element_rejected() {
+    err_contains(
+        "for x in [run([\"true\"])] {\n  print \"{x}\"\n}\n",
+        "副作用",
+    );
+    ok("for x in [\"a\", \"b\"] {\n  print \"{x}\"\n}\n");
+}
+
+#[test]
+fn loop_var_reassign_keeps_slot() {
+    // #1 回帰: ループ変数を分岐で発散させ再代入しても slot が分離しない
+    let r = compile(
+        "for i in 1 to 2 {\n  if 1 == 1 {\n    let i = \"x\"\n  }\n  let i = 0\n}\nprint \"ok\"\n",
+    )
+    .expect("compiles");
+    assert!(r.sh_payload.contains("__ap_v0=0"), "sh:\n{}", r.sh_payload);
+    assert!(
+        !r.sh_payload.contains("__ap_v1=0"),
+        "別 slot に分離してはならない:\n{}",
+        r.sh_payload
+    );
+}
+
+#[test]
 fn side_effect_in_compound_condition_rejected() {
     // and/or/not の内側に副作用のある呼び出しは書けない
     err_contains(
@@ -274,7 +313,7 @@ fn while_body_cannot_retype_condition_var() {
     // 条件は毎周評価されるため、本体で条件変数の型を変えると破綻する → 禁止
     err_contains(
         "let n = 3\nwhile n > 0 {\n  let n = \"x\"\n}\n",
-        "条件で使う変数",
+        "型を変えています",
     );
     ok("let n = 3\nwhile n > 0 {\n  let n = n - 1\n}\n");
 }

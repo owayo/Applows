@@ -254,8 +254,22 @@ impl Lowerer {
                 otherwise,
                 ..
             } => {
+                // 分岐で代入される変数には共通 slot を事前割り当てし、全分岐で同一 slot を
+                // 共有させる。これにより「全分岐が同型を代入する変数」を合流後に使え (仕様の
+                // `if{let s="a"}else{let s="b"}` パターン)、かつ再代入時の slot 分離も防ぐ。
+                let mut assigned = Vec::new();
+                for b in branches {
+                    collect_block_assigned_names(&b.body, &mut assigned);
+                }
+                if let Some(e) = otherwise {
+                    collect_block_assigned_names(e, &mut assigned);
+                }
+                for name in &assigned {
+                    self.preallocate_slot(name, scope);
+                }
+
                 // 各分岐を親スコープのクローン上で処理し、合流時に型を照合する。
-                // (分岐間で型が食い違う変数は「diverged」とし、以降の使用をエラーにする)
+                // (全パスで型が一致しない/未定義パスがある変数は「diverged」とし使用禁止)
                 let before = scope.clone();
                 let mut ir_branches = Vec::new();
                 let mut path_scopes: Vec<Scope> = Vec::new();
@@ -293,21 +307,11 @@ impl Lowerer {
                 let before = scope.clone();
                 let mut body_scope = before.clone();
                 let body = self.lower_block(body, &mut body_scope, fn_index, false);
-                // ループ不変条件: 条件は毎周評価されるが型検査は本体前の型で 1 回だけ行うため、
-                // 本体が条件で使う変数の型を変えると 2 周目以降に破綻する。これを禁止する。
-                let mut cond_slots = std::collections::HashSet::new();
-                collect_cond_var_slots(&cond, &mut cond_slots);
-                for (name, info) in &before.vars {
-                    if cond_slots.contains(&info.slot)
-                        && let Some(after) = body_scope.vars.get(name)
-                        && after.ty != info.ty
-                    {
-                        return Err(Diagnostic::error(
-                            format!("while の本体が条件で使う変数 `{name}` の型を変えています"),
-                            *span,
-                        )
-                        .with_note("ループ条件で使う変数の型は毎周一定である必要がある"));
-                    }
+                // ループ不変条件: 本体は 1 回だけ lowering されるが実行時は複数回回るため、
+                // ループ前から在る変数の型を本体が変えると 2 周目以降にコード生成の前提が崩れる
+                // (算術・比較・補間で破綻)。ループ前変数の型が本体で変わっていたらエラーにする。
+                if let Some((name, bt, at)) = loop_retyped_var(&before, &body_scope) {
+                    return Err(loop_invariant_error(&name, bt, at, *span));
                 }
                 *scope = merge_branch_scopes(&before, &[body_scope, before.clone()]);
                 Ok(Some(IrStmt::While { cond, body }))
@@ -354,6 +358,17 @@ impl Lowerer {
                     }
                     ForIter::Each(list_expr) => {
                         let list = self.lower_list(list_expr, scope, fn_index)?;
+                        // for-each のリスト要素に副作用のある呼び出しは書けない (反復子は 1 度だけ
+                        // 評価される想定で、emit 側も要素の副作用を実行しないため)。
+                        if let List::Literal(items) = &list
+                            && items.iter().any(value_has_side_effect)
+                        {
+                            return Err(Diagnostic::error(
+                                "for のリスト要素に副作用のある呼び出し (run / http_download / 関数呼び出し) は書けません",
+                                list_expr.span(),
+                            )
+                            .with_note("先に `let` で結果を受けてからリテラルに入れる"));
+                        }
                         let mut body_scope = before.clone();
                         let slot = self.declare_loop_var(var, Type::Text, &mut body_scope);
                         let body = self.lower_block(body, &mut body_scope, fn_index, false);
@@ -367,6 +382,10 @@ impl Lowerer {
                         )
                     }
                 };
+                // while と同じループ不変条件: ループ前変数の型を本体が変えていないこと
+                if let Some((name, bt, at)) = loop_retyped_var(&before, &body_scope) {
+                    return Err(loop_invariant_error(&name, bt, at, *span));
+                }
                 *scope = merge_branch_scopes(&before, &[body_scope, before.clone()]);
                 Ok(Some(ir))
             }
@@ -397,6 +416,7 @@ impl Lowerer {
             Some(info) => info.slot.clone(),
             None => self.fresh_var(),
         };
+        scope.diverged.remove(name);
         scope.vars.insert(
             name.to_string(),
             VarInfo {
@@ -405,6 +425,22 @@ impl Lowerer {
             },
         );
         slot
+    }
+
+    /// 分岐前に変数名へ slot を事前割り当てする (全分岐で同一 slot を共有させるため)。
+    /// 未定義なので diverged に入れ、代入されるまで読み出しを禁止する。
+    fn preallocate_slot(&mut self, name: &str, scope: &mut Scope) {
+        if !scope.vars.contains_key(name) {
+            let slot = self.fresh_var();
+            scope.vars.insert(
+                name.to_string(),
+                VarInfo {
+                    slot,
+                    ty: Type::Text,
+                },
+            );
+            scope.diverged.insert(name.to_string());
+        }
     }
 
     /// 式文としての呼び出し (戻り値を捨てる)。副作用のある呼び出しのみ許可。
@@ -933,57 +969,30 @@ fn string_literal_text(expr: &Expr) -> Option<String> {
     }
 }
 
-/// 条件が参照する変数 slot を集める (ループ不変条件の検査用)。
-fn collect_cond_var_slots(cond: &Cond, out: &mut std::collections::HashSet<String>) {
-    match cond {
-        Cond::Cmp { left, right, .. } => {
-            collect_value_var_slots(left, out);
-            collect_value_var_slots(right, out);
-        }
-        Cond::And(a, b) | Cond::Or(a, b) => {
-            collect_cond_var_slots(a, out);
-            collect_cond_var_slots(b, out);
-        }
-        Cond::Not(a) => collect_cond_var_slots(a, out),
-        Cond::Test { args, .. } => {
-            for a in args {
-                collect_value_var_slots(a, out);
-            }
+/// ループ前から在る変数のうち、本体で型が変わったものを 1 つ返す (name, 変更前, 変更後)。
+/// ループは複数回実行されるため、この型は毎周一定でなければならない。
+fn loop_retyped_var(before: &Scope, body_scope: &Scope) -> Option<(String, Type, Type)> {
+    for (name, info) in &before.vars {
+        if let Some(after) = body_scope.vars.get(name)
+            && after.ty != info.ty
+        {
+            return Some((name.clone(), info.ty, after.ty));
         }
     }
+    None
 }
 
-/// 値が参照する変数 slot を集める。
-fn collect_value_var_slots(v: &Value, out: &mut std::collections::HashSet<String>) {
-    match v {
-        Value::Var(s) => {
-            out.insert(s.clone());
-        }
-        Value::Str(parts) => {
-            for p in parts {
-                if let ir::StrPart::Var(s) = p {
-                    out.insert(s.clone());
-                }
-            }
-        }
-        Value::Arith { left, right, .. } => {
-            collect_value_var_slots(left, out);
-            collect_value_var_slots(right, out);
-        }
-        Value::Run { argv } => {
-            if let List::Literal(items) = argv {
-                for it in items {
-                    collect_value_var_slots(it, out);
-                }
-            }
-        }
-        Value::Builtin { args, .. } | Value::Call { args, .. } => {
-            for a in args {
-                collect_value_var_slots(a, out);
-            }
-        }
-        Value::Int(_) => {}
-    }
+/// ループ不変条件違反の診断。
+fn loop_invariant_error(name: &str, before: Type, after: Type, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        format!(
+            "ループ本体が変数 `{name}` の型を変えています ({} → {})",
+            before.describe(),
+            after.describe()
+        ),
+        span,
+    )
+    .with_note("ループは複数回実行されるため、本体で使う変数の型は毎周一定である必要がある")
 }
 
 /// 値が副作用を持つか (run / ユーザ関数 / http_download 等)。複合条件での禁止判定に使う。
@@ -1000,36 +1009,47 @@ fn value_has_side_effect(v: &Value) -> bool {
     }
 }
 
-/// if/while の各パスのスコープを合流させる。
-/// - `before` に既にある変数: 全パスで同じ型なら残す (slot は before のまま = 実行時も同一変数)。
-///   型が食い違えば diverged にして以降の使用を禁止。
-/// - 分岐内で新規導入された変数: パスごとに slot が異なり合流後に一意に定まらないため diverged。
+/// if/while/for の各パスのスコープを合流させる。
+///
+/// slot は名前ごとに固定 (`before` の slot を保持) し、実行時に同一シェル変数へ写像されることを保証する。
+/// ある変数が合流後に「定まった型」で使えるのは、**全パスで定義済み (diverged でなく) かつ型が一致**する場合のみ。
+/// それ以外は slot を残したまま diverged にし、再代入されるまで読み出しを禁止する。
 fn merge_branch_scopes(before: &Scope, paths: &[Scope]) -> Scope {
-    let mut merged = Scope {
-        vars: std::collections::HashMap::new(),
-        diverged: before.diverged.clone(),
-    };
-    for p in paths {
-        merged.diverged.extend(p.diverged.iter().cloned());
-    }
-    // before にある変数の型整合性を確認
-    for (name, info) in &before.vars {
-        let consistent = paths
-            .iter()
-            .all(|p| p.vars.get(name).map(|v| v.ty) == Some(info.ty));
-        if consistent && !merged.diverged.contains(name) {
+    let mut merged = Scope::default();
+    for (name, before_info) in &before.vars {
+        // 各パスでの型: 定義済み (vars にあり diverged でない) なら Some、そうでなければ None
+        let path_ty = |p: &Scope| -> Option<Type> {
+            if p.diverged.contains(name) {
+                None
+            } else {
+                p.vars.get(name).map(|v| v.ty)
+            }
+        };
+        let first = path_ty(&paths[0]);
+        let consistent = first.is_some() && paths.iter().all(|p| path_ty(p) == first);
+        // slot は常に維持 (再代入時に同一 slot を再利用させ、ループ制御変数の分離を防ぐ)
+        let slot = before_info.slot.clone();
+        if consistent {
             merged.vars.insert(
                 name.clone(),
                 VarInfo {
-                    slot: info.slot.clone(),
-                    ty: info.ty,
+                    slot,
+                    ty: first.unwrap(),
                 },
             );
         } else {
+            merged.vars.insert(
+                name.clone(),
+                VarInfo {
+                    slot,
+                    ty: before_info.ty,
+                },
+            );
             merged.diverged.insert(name.clone());
         }
     }
-    // 分岐内で新規に導入された変数は合流後に使えない (slot がパスごとに異なる)
+    // before に無い = ループ本体でのみ導入された変数 (ループ変数含む) は、合流後に一意な
+    // slot・型へ定まらないため使用禁止にする。(if の分岐変数は事前割り当てで before に入る)
     for p in paths {
         for name in p.vars.keys() {
             if !before.vars.contains_key(name) {
@@ -1038,6 +1058,39 @@ fn merge_branch_scopes(before: &Scope, paths: &[Scope]) -> Scope {
         }
     }
     merged
+}
+
+/// ブロック (と入れ子の if/while/for 本体) で代入される変数名を集める。
+/// if の分岐前 slot 事前割り当てに使う (関数定義には降りない)。
+fn collect_block_assigned_names(stmts: &[Stmt], out: &mut Vec<String>) {
+    let push = |n: &String, out: &mut Vec<String>| {
+        if !out.contains(n) {
+            out.push(n.clone());
+        }
+    };
+    for s in stmts {
+        match s {
+            Stmt::Let { name, .. } => push(name, out),
+            Stmt::For { var, body, .. } => {
+                push(var, out);
+                collect_block_assigned_names(body, out);
+            }
+            Stmt::While { body, .. } => collect_block_assigned_names(body, out),
+            Stmt::If {
+                branches,
+                otherwise,
+                ..
+            } => {
+                for b in branches {
+                    collect_block_assigned_names(&b.body, out);
+                }
+                if let Some(e) = otherwise {
+                    collect_block_assigned_names(e, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// シェル/PowerShell の環境変数名として妥当か (`^[A-Za-z_][A-Za-z0-9_]*$`)。

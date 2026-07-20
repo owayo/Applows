@@ -206,7 +206,9 @@ impl Ps {
             Value::Run { argv } => {
                 let cmd = self.render_argv(argv, &mut pre);
                 self.emit_pre(&pre);
-                self.line(&cmd);
+                // 起動失敗 (command not found 等) で全体終了しないよう局所 catch で握りつぶす
+                // (sh の 127 継続に相当。戻り値は捨てる文なので値は保持しない)。
+                self.line(&format!("try {{ {cmd} }} catch {{ }}"));
             }
             Value::Call { name, args } => {
                 let words: Vec<String> =
@@ -258,7 +260,10 @@ impl Ps {
             Builtin::Remove => {
                 let path = self.materialize(&args[0], &mut pre);
                 self.emit_pre(&pre);
-                self.line(&format!("Remove-Item -Force -LiteralPath {path}"));
+                // sh の `rm -f` に合わせ、存在しないファイルでもエラーにしない
+                self.line(&format!(
+                    "Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath {path}"
+                ));
             }
             Builtin::HttpDownload => {
                 let word = self.render_http_download(args, &mut pre);
@@ -279,13 +284,16 @@ impl Ps {
             Value::Arith { op, left, right } => {
                 let l = self.arith_operand(left, pre);
                 let r = self.arith_operand(right, pre);
-                format!("({l} {} {r})", arith_op(*op))
+                ps_arith(*op, &l, &r)
             }
             Value::Run { argv } => {
                 let cmd = self.render_argv(argv, pre);
                 let t = self.fresh_temp();
-                pre.push(cmd);
-                pre.push(format!("{t} = $LASTEXITCODE"));
+                // コマンドが見つからない等の起動失敗は sh では終了コード 127 で継続する。
+                // PS は $ErrorActionPreference='Stop' で例外→全体終了になるため局所 catch で 127 に揃える。
+                pre.push(format!(
+                    "try {{ {cmd}; {t} = $LASTEXITCODE }} catch {{ {t} = 127 }}"
+                ));
                 t
             }
             Value::Call { name, args } => {
@@ -310,7 +318,7 @@ impl Ps {
             Value::Arith { op, left, right } => {
                 let l = self.arith_operand(left, pre);
                 let r = self.arith_operand(right, pre);
-                format!("({l} {} {r})", arith_op(*op))
+                ps_arith(*op, &l, &r)
             }
             other => {
                 let word = self.materialize(other, pre);
@@ -484,6 +492,15 @@ fn literal_name(value: &Value) -> String {
         return s.clone();
     }
     "APPLOWS_UNKNOWN".to_string()
+}
+
+/// 算術式を PowerShell へ。除算だけは特別扱い: PowerShell の `/` は浮動小数除算のため、
+/// sh の整数除算 (0 方向への切り捨て) に合わせて `[long][math]::Truncate(...)` を使う。
+fn ps_arith(op: ArithOp, l: &str, r: &str) -> String {
+    match op {
+        ArithOp::Div => format!("[long][math]::Truncate([double]{l} / [double]{r})"),
+        _ => format!("({l} {} {r})", arith_op(op)),
+    }
 }
 
 fn arith_op(op: ArithOp) -> &'static str {

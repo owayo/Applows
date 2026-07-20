@@ -15,6 +15,30 @@ fn ok(src: &str) -> applows::CompileResult {
 }
 
 #[test]
+fn powershell_integer_division() {
+    // PS の / は浮動小数除算なので、整数除算に揃える ([long][math]::Truncate)
+    let r = ok("let x = 7 / 2\nprint \"{x}\"\n");
+    assert!(
+        r.ps_payload.contains("[long][math]::Truncate"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+    // sh は $(( )) の整数除算
+    assert!(r.sh_payload.contains("7 / 2"), "sh:\n{}", r.sh_payload);
+}
+
+#[test]
+fn powershell_run_has_launch_guard() {
+    // 存在しないコマンドで全体終了しないよう、PS の run は try/catch で 127 に揃える
+    let r = ok("let c = run([\"some-cmd\"])\nif c == 0 { print \"ok\" }\n");
+    assert!(
+        r.ps_payload.contains("catch { $__ap_t0 = 127 }"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+}
+
+#[test]
 fn newline_in_string_powershell_safe() {
     // 改行を含む文字列: PS の single-quoted は複数行不可なので [char]10 へ退避する
     let r = ok("print \"line1\\nline2\"\n");
