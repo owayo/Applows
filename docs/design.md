@@ -159,11 +159,14 @@ exit 0
 2. **UTF-8 自己再読込**: `Get-Content` は BOM 無し UTF-8 を UTF-8 と読まない場合があり日本語が壊れる。`[System.IO.File]::ReadAllText($env:APPLOWS_SELF, (New-Object System.Text.UTF8Encoding $false))` + `[ScriptBlock]::Create` を使う。
 3. **BOM 無し UTF-8 / LF 固定**: 出力は必ず BOM 無し UTF-8・LF。出力直後に再読込して検査。`.gitattributes` で変換禁止。
 4. **引数転送** (Codex レビューで罠を確定・修正): `powershell -Command "..." %*` では **`%*` は `$args` にならず**、PowerShell 5.1 の仕様上コマンド文字列末尾へ連結される (公式仕様)。そのため素朴な実装は「引数なしは動くが引数ありは構文破壊」する。対策として、
-   - ネイティブのプロセス引数を `[Environment]::GetCommandLineArgs()` で取得 (固定フラグ構成なので index 6 以降がユーザ引数)。UTF-16 で保持されるため日本語も安全。
+   - ネイティブのプロセス引数を `[Environment]::GetCommandLineArgs()` で取得。ユーザ引数の開始位置は **`-Command` を線形探索して +2** で動的に決める (grok レビュー: index 6 固定は起動フラグの増減で静かにずれるため脆い)。UTF-16 で保持されるため日本語も安全。
    - `-Command` 文字列末尾の `#` で、PowerShell が連結してくる `%*` をコメント化し二次評価 (`$env:X` / `$(...)` の展開) を防ぐ。
    - `setlocal DisableDelayedExpansion` で引数中の `!` 消失を防止。
    - `powershell.exe` をフルパス (`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`) で起動し 5.1 を明示。
-   - なお `%*` は cmd.exe を再通過するため、不均衡な `"`・未引用の `& | < >`・改行を含む引数は依然制限として仕様に明記する。
+   - 終了コードはペイロードが `exit` しなかった場合の保険として `exit [int]$global:__ap_ret` を伝播 (codex/grok 指摘)。
+   - **セキュリティ上の制限 (要明記)**: `%*` は cmd.exe を再通過するため、未引用の `& | < > ^` や `%VAR%`、不均衡な `"` を含む引数は cmd 側で壊れ得る。特に引用が割れると `#` より前にユーザ文字列が入りコード実行になり得る。実行時引数は通常の Windows CLI 規則で引用する前提とし、任意の信頼できない引数を安全に扱う用途では Base64/一時ファイル経由の引数受け渡し (将来拡張) を使う。ソースコード中のリテラルは single quote エスケープで安全 (この制限は実行時引数のみ)。
+
+**ポリグロット終端の衝突耐性**: sh のヒアドキュメント終端 (`APPLOWS_BATCH` 単独行) と PowerShell here-string 終端 (`'@` 行頭) が sh ペイロード内に出現すると構造が壊れる (最悪コード実行)。これは文字列エスケープでは防げない行構造の問題だが、`verify` パスが「`'@` 行頭がちょうど 1 個」「`APPLOWS_BATCH` 単独行がちょうど 1 個」を出力後に機械検査し、違反時はコンパイルを失敗させる (fail-closed) ことで担保する。
 5. **明示的 exit code**: `$LASTEXITCODE` に依存せず、runtime で `$__ap_status` を管理し `exit [int]$__ap_status`。Batch も `exit /b %ERRORLEVEL%`。
 
 ### Verify (構造検査)

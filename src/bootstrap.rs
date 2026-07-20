@@ -30,21 +30,32 @@ pub fn assemble(sh_payload: &str, ps_payload: &str) -> String {
     //   (index 6 以降がユーザ引数)、コマンド末尾の `#` で連結される %* をコメント化する。
     //   さらに setlocal DisableDelayedExpansion で引数中の `!` 消失を防ぎ、
     //   powershell.exe をフルパス起動、bootstrap 自体を try/catch で保護する。
+    // ユーザ引数の開始位置は index 6 固定ではなく `-Command` を探して +2 で動的決定する
+    // (grok レビュー: 起動フラグの増減で静かにずれる脆さを解消)。終了コードは
+    // ペイロードが exit しなかった場合の保険として $global:__ap_ret を伝播する。
     out.push_str("@echo off\n");
     out.push_str("setlocal DisableDelayedExpansion\n");
     out.push_str("set \"APPLOWS_SELF=%~f0\"\n");
     out.push_str(
-        "\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -Command \"try { $v=[Environment]::GetCommandLineArgs(); $a=@(); if($v.Length -gt 6){$a=@($v[6..($v.Length-1)])}; $u=New-Object System.Text.UTF8Encoding $false; $s=[System.IO.File]::ReadAllText($env:APPLOWS_SELF,$u); $b=[ScriptBlock]::Create($s); & $b @a; exit 0 } catch { [Console]::Error.WriteLine($_); exit 1 } #\" %*\n",
+        "\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -Command \"try { $v=[Environment]::GetCommandLineArgs(); $i=0; while($i -lt $v.Length -and $v[$i] -ine '-Command'){$i++}; $j=$i+2; $a=@(); if($v.Length -gt $j){$a=@($v[$j..($v.Length-1)])}; $u=New-Object System.Text.UTF8Encoding $false; $s=[System.IO.File]::ReadAllText($env:APPLOWS_SELF,$u); $b=[ScriptBlock]::Create($s); & $b @a; exit [int]$global:__ap_ret } catch { [Console]::Error.WriteLine($_); exit 1 } #\" %*\n",
     );
     out.push_str("set \"__ap_rc=%ERRORLEVEL%\"\n");
     out.push_str("endlocal & exit /b %__ap_rc%\n");
     out.push_str(BATCH_DELIM);
     out.push('\n');
     // --- sh ペイロード (macOS) ---
+    // sh が PowerShell 部 (`'@` 以降) へ到達しないよう必ず exit で終端する。
+    // ペイロード末尾が既にトップレベルの exit なら二重出力しない。
     out.push_str("# ==== Applows sh payload (macOS /bin/sh + zsh) ====\n");
     out.push_str(sh);
     out.push('\n');
-    out.push_str("exit 0\n");
+    let ends_with_exit = sh
+        .lines()
+        .last()
+        .is_some_and(|l| l == "exit 0" || l.starts_with("exit "));
+    if !ends_with_exit {
+        out.push_str("exit 0\n");
+    }
     out.push_str(PS_HEREDOC_END);
     out.push('\n');
     // --- PowerShell ペイロード (Windows) ---

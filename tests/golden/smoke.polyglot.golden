@@ -5,7 +5,7 @@ REM '; : << 'APPLOWS_BATCH'
 @echo off
 setlocal DisableDelayedExpansion
 set "APPLOWS_SELF=%~f0"
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "try { $v=[Environment]::GetCommandLineArgs(); $a=@(); if($v.Length -gt 6){$a=@($v[6..($v.Length-1)])}; $u=New-Object System.Text.UTF8Encoding $false; $s=[System.IO.File]::ReadAllText($env:APPLOWS_SELF,$u); $b=[ScriptBlock]::Create($s); & $b @a; exit 0 } catch { [Console]::Error.WriteLine($_); exit 1 } #" %*
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "try { $v=[Environment]::GetCommandLineArgs(); $i=0; while($i -lt $v.Length -and $v[$i] -ine '-Command'){$i++}; $j=$i+2; $a=@(); if($v.Length -gt $j){$a=@($v[$j..($v.Length-1)])}; $u=New-Object System.Text.UTF8Encoding $false; $s=[System.IO.File]::ReadAllText($env:APPLOWS_SELF,$u); $b=[ScriptBlock]::Create($s); & $b @a; exit [int]$global:__ap_ret } catch { [Console]::Error.WriteLine($_); exit 1 } #" %*
 set "__ap_rc=%ERRORLEVEL%"
 endlocal & exit /b %__ap_rc%
 APPLOWS_BATCH
@@ -36,7 +36,6 @@ for __ap_v4 in "$@"; do
   printf '%s\n' 'arg='"${__ap_v4}"
 done
 printf '%s\n' 'smoke end'
-exit 0
 exit 0
 '@
 # ==== Applows PowerShell payload (Windows 11) ====
