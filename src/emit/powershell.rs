@@ -387,7 +387,9 @@ impl Ps {
                 let words: Vec<String> = items.iter().map(|v| self.materialize(v, pre)).collect();
                 format!("& {}", words.join(" "))
             }
-            List::Args => "& $__ap_args[0] @($__ap_args | Select-Object -Skip 1)".to_string(),
+            // 引数 0 個のとき $__ap_args[0] が $null で `& $null` 例外になるのを防ぐ
+            // (sh の "$@" が空で無害なのと挙動を揃える)
+            List::Args => "if ($__ap_args.Count -gt 0) { & $__ap_args[0] @($__ap_args | Select-Object -Skip 1) }".to_string(),
         }
     }
 

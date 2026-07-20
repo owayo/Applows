@@ -204,6 +204,71 @@ fn empty_run_argv_rejected() {
     err_contains("let c = run([])\n", "空にできません");
 }
 
+// ---- コードレビューで検出したバグの回帰テスト ----
+
+#[test]
+fn env_name_injection_rejected() {
+    // env の変数名に注入的な文字列を渡すとコンパイルエラー
+    err_contains(
+        "let x = env(\"FOO:-$(touch /tmp/pwned)\", \"d\")\n",
+        "環境変数名",
+    );
+    err_contains("let x = env(\"a b\", \"d\")\n", "環境変数名");
+    // 正常な名前は通る
+    ok("let x = env(\"PATH\", \"\")\n");
+    ok("let x = env(\"MY_VAR\", \"default\")\n");
+}
+
+#[test]
+fn if_else_type_divergence_rejected() {
+    // 分岐で型が食い違う変数を if の後で使うとエラー
+    err_contains(
+        "if 1 == 1 {\n  let x = \"s\"\n} else {\n  let x = 2\n}\nlet y = x + 1\n",
+        "型が定まらない",
+    );
+}
+
+#[test]
+fn consistent_branch_types_ok() {
+    // 全分岐で同じ型なら if の後で使える
+    ok(
+        "let x = 0\nif 1 == 1 {\n  let x = 1\n} else {\n  let x = 2\n}\nlet y = x + 1\nprint \"{y}\"\n",
+    );
+}
+
+#[test]
+fn side_effect_in_compound_condition_rejected() {
+    // and/or/not の内側に副作用のある呼び出しは書けない
+    err_contains(
+        "if 1 == 2 and run([\"true\"]) == 0 {\n  print \"x\"\n}\n",
+        "副作用",
+    );
+    // 単独の比較なら run を条件に書ける
+    ok("if run([\"true\"]) == 0 {\n  print \"ok\"\n}\n");
+    // 純粋な複合条件 (比較 and exists) は通る
+    ok("let n = 1\nif n > 0 and exists(\"/tmp\") {\n  print \"ok\"\n}\n");
+}
+
+#[test]
+fn arg_index_must_be_positive() {
+    err_contains("let a = arg(0)\n", "1 以上");
+    ok("let a = arg(1)\n");
+}
+
+#[test]
+fn duplicate_param_names_rejected() {
+    err_contains("fn f(a, a) {\n  return 0\n}\nf(\"x\", \"y\")\n", "重複");
+}
+
+#[test]
+fn loop_variable_not_usable_after_loop() {
+    // 0 回実行され得るループの変数は後段で使えない
+    err_contains(
+        "for i in 1 to 3 {\n  print \"{i}\"\n}\nprint \"{i}\"\n",
+        "型が定まらない",
+    );
+}
+
 #[test]
 fn args_only_at_top_level() {
     err_contains(

@@ -50,10 +50,13 @@ struct VarInfo {
     ty: Type,
 }
 
-/// スコープ (グローバル or 関数単位)。ブロックは新スコープを作らない (シェル準拠)。
-#[derive(Default)]
+/// スコープ (グローバル or 関数単位)。ブロックは新スコープを作らないが (シェル準拠)、
+/// if/else の分岐だけはクローンして分離し、合流時に型を照合する。
+#[derive(Default, Clone)]
 struct Scope {
     vars: HashMap<String, VarInfo>,
+    /// if の分岐で型/定義が食い違い、以降で安全に使えない変数名。
+    diverged: std::collections::HashSet<String>,
 }
 
 /// 関数シグネチャ。
@@ -107,6 +110,16 @@ impl Lowerer {
                         format!("関数 `{name}` が二重定義されています"),
                         *span,
                     ));
+                }
+                // パラメータ名の重複を検出 (片方が名前でアクセス不能になる typo を防ぐ)
+                let mut seen = std::collections::HashSet::new();
+                for p in params {
+                    if !seen.insert(p.clone()) {
+                        self.err(Diagnostic::error(
+                            format!("関数 `{name}` のパラメータ名 `{p}` が重複しています"),
+                            *span,
+                        ));
+                    }
                 }
                 let slot = format!("__ap_f{index}");
                 self.funcs.insert(
@@ -202,6 +215,8 @@ impl Lowerer {
                     Some(info) => info.slot.clone(),
                     None => self.fresh_var(),
                 };
+                // 無条件の再代入は型を確定させるので diverged 状態を解除する
+                scope.diverged.remove(name);
                 scope.vars.insert(
                     name.clone(),
                     VarInfo {
@@ -239,54 +254,89 @@ impl Lowerer {
                 otherwise,
                 ..
             } => {
+                // 各分岐を親スコープのクローン上で処理し、合流時に型を照合する。
+                // (分岐間で型が食い違う変数は「diverged」とし、以降の使用をエラーにする)
+                let before = scope.clone();
                 let mut ir_branches = Vec::new();
+                let mut path_scopes: Vec<Scope> = Vec::new();
                 for b in branches {
-                    let cond = self.lower_cond(&b.cond, scope, fn_index)?;
-                    let body = self.lower_block(&b.body, scope, fn_index, false);
+                    // 条件は「どの分岐本体も未実行」の状態 (= before) で評価される
+                    let cond = self.lower_cond(&b.cond, scope, fn_index, false)?;
+                    let mut branch_scope = before.clone();
+                    let body = self.lower_block(&b.body, &mut branch_scope, fn_index, false);
+                    path_scopes.push(branch_scope);
                     ir_branches.push((cond, body));
                 }
-                let otherwise = otherwise
-                    .as_ref()
-                    .map(|b| self.lower_block(b, scope, fn_index, false));
+                let otherwise = match otherwise {
+                    Some(b) => {
+                        let mut else_scope = before.clone();
+                        let body = self.lower_block(b, &mut else_scope, fn_index, false);
+                        path_scopes.push(else_scope);
+                        Some(body)
+                    }
+                    None => {
+                        // else が無い = 「どの分岐にも入らない」パスがあり、変数は before のまま
+                        path_scopes.push(before.clone());
+                        None
+                    }
+                };
+                *scope = merge_branch_scopes(&before, &path_scopes);
                 Ok(Some(IrStmt::If {
                     branches: ir_branches,
                     otherwise,
                 }))
             }
             Stmt::While { cond, body, .. } => {
-                let cond = self.lower_cond(cond, scope, fn_index)?;
-                let body = self.lower_block(body, scope, fn_index, false);
+                let cond = self.lower_cond(cond, scope, fn_index, false)?;
+                // ループ本体はクローン上で処理し、代入された変数は while 後 diverged 扱いにする
+                // (0 回実行の可能性があるため、本体で作られた型を後段で当てにできない)
+                let before = scope.clone();
+                let mut body_scope = before.clone();
+                let body = self.lower_block(body, &mut body_scope, fn_index, false);
+                *scope = merge_branch_scopes(&before, &[body_scope, before.clone()]);
                 Ok(Some(IrStmt::While { cond, body }))
             }
             Stmt::For {
                 var, iter, body, ..
             } => {
-                let ir = match iter {
+                // ループは 0 回実行され得る (空リスト / start>end) ため、本体はクローン上で
+                // 処理し、本体で作られた型を while と同様に合流時 diverged 扱いにする。
+                let before = scope.clone();
+                let (ir, body_scope) = match iter {
                     ForIter::Range { start, end } => {
                         let (s, st) = self.lower_value(start, scope, fn_index)?;
                         self.expect(st, Type::Int, start.span())?;
                         let (e, et) = self.lower_value(end, scope, fn_index)?;
                         self.expect(et, Type::Int, end.span())?;
-                        let slot = self.declare_loop_var(var, Type::Int, scope);
-                        let body = self.lower_block(body, scope, fn_index, false);
-                        IrStmt::ForRange {
-                            var: slot,
-                            start: s,
-                            end: e,
-                            body,
-                        }
+                        let mut body_scope = before.clone();
+                        let slot = self.declare_loop_var(var, Type::Int, &mut body_scope);
+                        let body = self.lower_block(body, &mut body_scope, fn_index, false);
+                        (
+                            IrStmt::ForRange {
+                                var: slot,
+                                start: s,
+                                end: e,
+                                body,
+                            },
+                            body_scope,
+                        )
                     }
                     ForIter::Each(list_expr) => {
                         let list = self.lower_list(list_expr, scope, fn_index)?;
-                        let slot = self.declare_loop_var(var, Type::Text, scope);
-                        let body = self.lower_block(body, scope, fn_index, false);
-                        IrStmt::ForEach {
-                            var: slot,
-                            list,
-                            body,
-                        }
+                        let mut body_scope = before.clone();
+                        let slot = self.declare_loop_var(var, Type::Text, &mut body_scope);
+                        let body = self.lower_block(body, &mut body_scope, fn_index, false);
+                        (
+                            IrStmt::ForEach {
+                                var: slot,
+                                list,
+                                body,
+                            },
+                            body_scope,
+                        )
                     }
                 };
+                *scope = merge_branch_scopes(&before, &[body_scope, before.clone()]);
                 Ok(Some(ir))
             }
             Stmt::Return { value, span } => {
@@ -531,14 +581,40 @@ impl Lowerer {
                 args[0].span(),
             ));
         }
-        if builtin.requires_literal_int_arg() && !matches!(args[0], Expr::Int { .. }) {
-            return Err(Diagnostic::error(
-                format!(
-                    "`{}` の引数は整数リテラルである必要があります",
-                    builtin.name()
-                ),
-                args.first().map(|a| a.span()).unwrap_or(span),
-            ));
+        // env の変数名は識別子文字に限定する (生成コードの構文位置へ素通しさせない = コード注入防止)。
+        if builtin == Builtin::Env {
+            let name = string_literal_text(&args[0]).unwrap_or_default();
+            if !is_valid_env_name(&name) {
+                return Err(Diagnostic::error(
+                    format!("環境変数名 `{name}` が不正です"),
+                    args[0].span(),
+                )
+                .with_note("英字/アンダースコア始まりの英数字・アンダースコアのみ使用可 (例: PATH, HOME, MY_VAR)"));
+            }
+        }
+        if builtin.requires_literal_int_arg() {
+            match &args[0] {
+                Expr::Int { value, .. } if *value >= 1 => {}
+                Expr::Int { .. } => {
+                    return Err(Diagnostic::error(
+                        format!(
+                            "`{}` のインデックスは 1 以上である必要があります",
+                            builtin.name()
+                        ),
+                        args[0].span(),
+                    )
+                    .with_note("引数は 1 始まり (arg(1) が最初の引数)"));
+                }
+                _ => {
+                    return Err(Diagnostic::error(
+                        format!(
+                            "`{}` の引数は整数リテラルである必要があります",
+                            builtin.name()
+                        ),
+                        args.first().map(|a| a.span()).unwrap_or(span),
+                    ));
+                }
+            }
         }
 
         let mut ir_args = Vec::new();
@@ -607,6 +683,7 @@ impl Lowerer {
         expr: &Expr,
         scope: &mut Scope,
         fn_index: Option<usize>,
+        compound: bool,
     ) -> Result<Cond, Diagnostic> {
         match expr {
             Expr::Cmp {
@@ -618,6 +695,16 @@ impl Lowerer {
             } => {
                 let (l, lt) = self.lower_value(left, scope, fn_index)?;
                 let (r, rt) = self.lower_value(right, scope, fn_index)?;
+                // and/or/not の内側では副作用のある呼び出しを禁止する。
+                // 現状の生成コードは条件を短絡評価しないため、複合条件に run 等を書くと
+                // 判定前に必ず実行されてしまう。let で受けてから比較させる。
+                if compound && (value_has_side_effect(&l) || value_has_side_effect(&r)) {
+                    return Err(Diagnostic::error(
+                        "and/or/not の内側に副作用のある呼び出し (run / http_download / 関数呼び出し) は書けません",
+                        *span,
+                    )
+                    .with_note("`let c = run([...])` で受けてから `c == 0` を条件に使う (条件は短絡評価されないため)"));
+                }
                 if lt != rt {
                     return Err(Diagnostic::error(
                         format!(
@@ -656,15 +743,15 @@ impl Lowerer {
             Expr::Logic {
                 op, left, right, ..
             } => {
-                let l = self.lower_cond(left, scope, fn_index)?;
-                let r = self.lower_cond(right, scope, fn_index)?;
+                let l = self.lower_cond(left, scope, fn_index, true)?;
+                let r = self.lower_cond(right, scope, fn_index, true)?;
                 Ok(match op {
                     LogicOp::And => Cond::And(Box::new(l), Box::new(r)),
                     LogicOp::Or => Cond::Or(Box::new(l), Box::new(r)),
                 })
             }
             Expr::Not { expr: inner, .. } => Ok(Cond::Not(Box::new(
-                self.lower_cond(inner, scope, fn_index)?,
+                self.lower_cond(inner, scope, fn_index, true)?,
             ))),
             Expr::Call { name, args, span } => {
                 let Some(builtin) = Builtin::from_name(name) else {
@@ -750,6 +837,15 @@ impl Lowerer {
     // ---- ヘルパ ----
 
     fn lookup_var(&mut self, name: &str, scope: &Scope, span: Span) -> Result<VarInfo, Diagnostic> {
+        if scope.diverged.contains(name) {
+            return Err(Diagnostic::error(
+                format!("変数 `{name}` は if/while の分岐で型が定まらないため使えません"),
+                span,
+            )
+            .with_note(format!(
+                "分岐の外で `let {name} = ...` と再代入して型を確定させてから使う"
+            )));
+        }
         scope
             .vars
             .get(name)
@@ -788,4 +884,84 @@ impl Lowerer {
 /// 補間なしの単一リテラル文字列か。
 fn is_string_literal(expr: &Expr) -> bool {
     matches!(expr, Expr::Str { parts, .. } if parts.iter().all(|p| matches!(p, StrPart::Lit(_))))
+}
+
+/// 補間なしリテラル文字列の中身を連結して取り出す (補間を含むなら None)。
+fn string_literal_text(expr: &Expr) -> Option<String> {
+    if let Expr::Str { parts, .. } = expr {
+        let mut out = String::new();
+        for p in parts {
+            match p {
+                StrPart::Lit(s) => out.push_str(s),
+                StrPart::Var(_) => return None,
+            }
+        }
+        Some(out)
+    } else {
+        None
+    }
+}
+
+/// 値が副作用を持つか (run / ユーザ関数 / http_download 等)。複合条件での禁止判定に使う。
+fn value_has_side_effect(v: &Value) -> bool {
+    match v {
+        Value::Run { .. } | Value::Call { .. } => true,
+        Value::Builtin { builtin, args } => {
+            builtin.is_side_effecting() || args.iter().any(value_has_side_effect)
+        }
+        Value::Arith { left, right, .. } => {
+            value_has_side_effect(left) || value_has_side_effect(right)
+        }
+        Value::Int(_) | Value::Str(_) | Value::Var(_) => false,
+    }
+}
+
+/// if/while の各パスのスコープを合流させる。
+/// - `before` に既にある変数: 全パスで同じ型なら残す (slot は before のまま = 実行時も同一変数)。
+///   型が食い違えば diverged にして以降の使用を禁止。
+/// - 分岐内で新規導入された変数: パスごとに slot が異なり合流後に一意に定まらないため diverged。
+fn merge_branch_scopes(before: &Scope, paths: &[Scope]) -> Scope {
+    let mut merged = Scope {
+        vars: std::collections::HashMap::new(),
+        diverged: before.diverged.clone(),
+    };
+    for p in paths {
+        merged.diverged.extend(p.diverged.iter().cloned());
+    }
+    // before にある変数の型整合性を確認
+    for (name, info) in &before.vars {
+        let consistent = paths
+            .iter()
+            .all(|p| p.vars.get(name).map(|v| v.ty) == Some(info.ty));
+        if consistent && !merged.diverged.contains(name) {
+            merged.vars.insert(
+                name.clone(),
+                VarInfo {
+                    slot: info.slot.clone(),
+                    ty: info.ty,
+                },
+            );
+        } else {
+            merged.diverged.insert(name.clone());
+        }
+    }
+    // 分岐内で新規に導入された変数は合流後に使えない (slot がパスごとに異なる)
+    for p in paths {
+        for name in p.vars.keys() {
+            if !before.vars.contains_key(name) {
+                merged.diverged.insert(name.clone());
+            }
+        }
+    }
+    merged
+}
+
+/// シェル/PowerShell の環境変数名として妥当か (`^[A-Za-z_][A-Za-z0-9_]*$`)。
+fn is_valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
