@@ -1,0 +1,12 @@
+# Applows の出力ポリグロットは LF 固定が必須 (CR が混ざると sh のシバン/ヒアドキュメントが壊れる)。
+# リポジトリ全体で改行を LF に固定し、Windows チェックアウトでの CRLF 変換を防ぐ。
+* text=auto eol=lf
+
+*.rs      text eol=lf
+*.aplo    text eol=lf
+*.bat     text eol=lf
+*.md      text eol=lf
+*.toml    text eol=lf
+*.yml     text eol=lf
+*.sh      text eol=lf
+Makefile  text eol=lf

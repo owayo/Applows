@@ -1,0 +1,60 @@
+# Applows 言語ツアー: 主要機能を一通り使うサンプル
+
+print "== Applows tour =="
+
+# 変数と補間
+let name = "world"
+print "hello, {name}!"
+
+# 整数と算術
+let count = 3
+let doubled = count * 2
+print "count={count} doubled={doubled}"
+
+# 条件分岐 (truthiness は無い。比較・組み込み Bool を使う)
+if count > 2 and name == "world" {
+  print "branch: big and world"
+} else if count == 0 {
+  print "branch: zero"
+} else {
+  print "branch: other"
+}
+
+# while ループ
+let n = count
+while n > 0 {
+  print "n={n}"
+  let n = n - 1
+}
+
+# 整数レンジの for
+for i in 1 to 3 {
+  print "range i={i}"
+}
+
+# リストの for
+for fruit in ["apple", "banana", "cherry"] {
+  print "fruit={fruit}"
+}
+
+# 関数 (値渡し / 戻り値は Status)
+fn greet(who) {
+  print "greet: {who}"
+  return 0
+}
+greet("team")
+
+# 外部コマンド (argv 配列)。戻り値は終了コード
+let code = run(["echo", "from run:", name])
+if code == 0 {
+  print "run succeeded"
+}
+
+# スクリプト自身の位置と作業ディレクトリ
+let sd = script_dir()
+let here = cwd()
+print "script_dir={sd}"
+print "cwd={here}"
+
+print "== done =="
+exit 0

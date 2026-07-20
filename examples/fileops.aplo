@@ -1,0 +1,42 @@
+# ファイル操作の例: write_text で作成 → exists で確認 → read_text で読み出し →
+# append_text で追記 → copy で複製し、最後に remove で後片付けする。
+
+print "== fileops =="
+
+let path = "fileops-demo.txt"
+let backup = "fileops-demo.bak"
+
+# 1) 書き込み (UTF-8 / BOM 無し。一時ファイル経由の原子的置換)
+write_text(path, "first line\n")
+
+# 2) 存在確認 (exists は Bool を返すので条件にだけ使える)
+if exists(path) {
+  print "created: {path}"
+} else {
+  print "NG: 書き込みに失敗しました"
+  exit 1
+}
+
+# 3) 読み出し。末尾改行の扱いが OS で異なるため trim で正規化する
+let content = trim(read_text(path))
+print "content: [{content}]"
+
+# 4) 追記して読み直す
+append_text(path, "second line\n")
+let all = trim(read_text(path))
+print "after append:"
+print all
+
+# 5) 複製してから両方を削除する
+copy(path, backup)
+if is_file(backup) {
+  print "copied: {path} -> {backup}"
+}
+remove(path)
+remove(backup)
+if not exists(path) and not exists(backup) {
+  print "cleaned up"
+}
+
+print "== fileops done =="
+exit 0

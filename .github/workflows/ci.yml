@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Format check
+        run: cargo fmt -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --verbose
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+  e2e-macos:
+    name: E2E (macOS /bin/sh + zsh)
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build compiler
+        run: cargo build --release
+      - name: Compile smoke fixture
+        run: ./target/release/applows build tests/fixtures/smoke.aplo -o smoke.bat
+      - name: Verify output is LF-only, no BOM
+        run: |
+          if grep -q $'\r' smoke.bat; then echo "CRLF found in output"; exit 1; fi
+          if head -c 3 smoke.bat | od -An -tx1 | grep -q "ef bb bf"; then echo "BOM found"; exit 1; fi
+      - name: Run under /bin/sh
+        run: |
+          out=$(/bin/sh smoke.bat alpha "two words")
+          echo "$out"
+          echo "$out" | grep -q "^smoke start$"
+          echo "$out" | grep -q "^argc=2$"
+          echo "$out" | grep -q "^sum ok$"
+          echo "$out" | grep -q "^label: hello$"
+          echo "$out" | grep -q "^arg=alpha$"
+          echo "$out" | grep -q "^arg=two words$"
+          echo "$out" | grep -q "^smoke end$"
+      - name: Run under zsh
+        run: |
+          out=$(/bin/zsh smoke.bat alpha "two words")
+          echo "$out" | grep -q "^smoke end$"
+      - name: Syntax-check extracted sh payload
+        run: |
+          ./target/release/applows emit tests/fixtures/smoke.aplo --target sh > payload.sh
+          /bin/sh -n payload.sh
+          /bin/zsh -n payload.sh
+
+  e2e-windows:
+    name: E2E (Windows PowerShell 5.1)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 生成物のバイト検証のため、チェックアウトで改行変換させない
+          # (compile はワークフロー内で行うので実害は無いが念のため)
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build compiler
+        run: cargo build --release
+      - name: Show PowerShell version (expect 5.1)
+        shell: cmd
+        run: powershell -NoProfile -Command "$PSVersionTable.PSVersion.ToString()"
+      - name: Compile smoke fixture
+        shell: cmd
+        run: target\release\applows.exe build tests\fixtures\smoke.aplo -o smoke.bat
+      - name: Run smoke.bat (cmd -> Windows PowerShell 5.1)
+        shell: cmd
+        run: |
+          call smoke.bat alpha "two words" > actual.txt 2>&1
+          type actual.txt
+      - name: Verify output
+        shell: pwsh
+        run: |
+          $out = Get-Content actual.txt -Raw
+          Write-Host $out
+          foreach ($needle in @('smoke start','argc=2','sum ok','label: hello','arg=alpha','arg=two words','smoke end')) {
+            if ($out -notmatch [regex]::Escape($needle)) { throw "missing: $needle" }
+          }
+          Write-Host 'windows e2e ok'
+      - name: Syntax-check extracted PowerShell payload
+        shell: pwsh
+        run: |
+          target\release\applows.exe emit tests\fixtures\smoke.aplo --target powershell > payload.ps1
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseInput((Get-Content payload.ps1 -Raw), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Host $_ }; throw 'PowerShell parse errors' }
+          Write-Host 'ps payload parses ok'

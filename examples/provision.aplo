@@ -1,0 +1,42 @@
+# プロビジョニング検査の例: 前提コマンド・ディレクトリ・設定ファイルを検査し、
+# 問題がなければ 0、不足があれば非 0 の終了コードで報告する。
+
+print "== provision check =="
+
+# 設定は環境変数から取得する (未設定ならデフォルト値)
+let workspace = env("APP_WORKSPACE", "workspace")
+let remote = env("APP_REMOTE", "https://example.com/releases")
+print "workspace: {workspace}"
+print "remote:    {remote}"
+
+# 前提コマンドの確認: run は終了コード (Int) を返す
+let git_status = run(["git", "--version"])
+if git_status != 0 {
+  print "NG: git が見つかりません (exit={git_status})"
+  exit 1
+}
+print "OK: git"
+
+# ワークスペースディレクトリの検査
+if not exists(workspace) {
+  print "NG: workspace がありません: {workspace}"
+  print "hint: ディレクトリを作成してから再実行してください"
+  exit 2
+}
+if not is_dir(workspace) {
+  print "NG: {workspace} はディレクトリではありません"
+  exit 2
+}
+print "OK: workspace"
+
+# 設定ファイルが無ければ既定値で作成する (write_text は原子的に置換する)
+let conf = "{workspace}/provision.conf"
+if is_file(conf) {
+  print "OK: {conf}"
+} else {
+  write_text(conf, "profile=default\ncontact=you@example.com\n")
+  print "created: {conf}"
+}
+
+print "== provision done =="
+exit 0

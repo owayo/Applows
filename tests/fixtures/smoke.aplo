@@ -1,0 +1,32 @@
+# CI E2E 用の決定的スモークプログラム。
+# OS 依存の外部コマンドやファイル/環境に触れず、両 OS で同一出力になる機能だけを使う。
+
+print "smoke start"
+
+let n = argc()
+print "argc={n}"
+
+let sum = 0
+for i in 1 to 5 {
+  let sum = sum + i
+}
+print "sum={sum}"
+
+if sum == 15 {
+  print "sum ok"
+} else {
+  print "sum bad"
+}
+
+fn label(x) {
+  print "label: {x}"
+  return 0
+}
+label("hello")
+
+for a in args() {
+  print "arg={a}"
+}
+
+print "smoke end"
+exit 0

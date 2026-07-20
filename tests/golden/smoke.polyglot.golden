@@ -1,0 +1,78 @@
+#!/bin/sh
+function REM() { return; }
+REM @'
+REM '; : << 'APPLOWS_BATCH'
+@echo off
+set "APPLOWS_SELF=%~f0"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$u=New-Object System.Text.UTF8Encoding $false; $s=[System.IO.File]::ReadAllText($env:APPLOWS_SELF,$u); $b=[ScriptBlock]::Create($s); & $b @args; exit $LASTEXITCODE" %*
+exit /b %ERRORLEVEL%
+APPLOWS_BATCH
+# ==== Applows sh payload (macOS /bin/sh + zsh) ====
+__ap_f0() {
+  local __ap_v0="$1"
+  printf '%s\n' 'label: '"${__ap_v0}"
+  return 0
+}
+printf '%s\n' 'smoke start'
+__ap_v1="$#"
+printf '%s\n' 'argc='"${__ap_v1}"
+__ap_v2=0
+__ap_v3=1
+__ap_t0=5
+while [ "$__ap_v3" -le "$__ap_t0" ]; do
+  __ap_v2="$((__ap_v2 + __ap_v3))"
+  __ap_v3=$((__ap_v3 + 1))
+done
+printf '%s\n' 'sum='"${__ap_v2}"
+if [ "${__ap_v2}" -eq 15 ]; then
+  printf '%s\n' 'sum ok'
+else
+  printf '%s\n' 'sum bad'
+fi
+__ap_f0 'hello'
+for __ap_v4 in "$@"; do
+  printf '%s\n' 'arg='"${__ap_v4}"
+done
+printf '%s\n' 'smoke end'
+exit 0
+exit 0
+'@
+# ==== Applows PowerShell payload (Windows 11) ====
+$__ap_args = $args
+$global:__ap_ret = 0
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {}
+$ErrorActionPreference = 'Stop'
+function __ap_f0 {
+  param($__ap_v0)
+  [Console]::Out.WriteLine(('label: ' + [string]$__ap_v0))
+  $global:__ap_ret = 0
+  return
+}
+try {
+  [Console]::Out.WriteLine('smoke start')
+  $__ap_v1 = $__ap_args.Count
+  [Console]::Out.WriteLine(('argc=' + [string]$__ap_v1))
+  $__ap_v2 = 0
+  $__ap_v3 = 1
+  $__ap_t0 = 5
+  while ($__ap_v3 -le $__ap_t0) {
+    $__ap_v2 = ([long]$__ap_v2 + [long]$__ap_v3)
+    $__ap_v3 = $__ap_v3 + 1
+  }
+  [Console]::Out.WriteLine(('sum=' + [string]$__ap_v2))
+  if (([long]$__ap_v2 -eq [long]15)) {
+    [Console]::Out.WriteLine('sum ok')
+  } else {
+    [Console]::Out.WriteLine('sum bad')
+  }
+  __ap_f0 'hello'
+  foreach ($__ap_v4 in $__ap_args) {
+    [Console]::Out.WriteLine(('arg=' + [string]$__ap_v4))
+  }
+  [Console]::Out.WriteLine('smoke end')
+  exit [int](0)
+  exit 0
+} catch {
+  [Console]::Error.WriteLine($_)
+  exit 1
+}

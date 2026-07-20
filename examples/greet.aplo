@@ -1,0 +1,39 @@
+# 制御構造と関数の教育的な例: for ループ・関数定義と呼び出し・if・文字列補間。
+# 関数はトップレベルで定義し、パラメータは Text として値渡しされる。
+
+fn greet(who, salute) {
+  let msg = "{salute}, {who}!"
+  print msg
+  return 0
+}
+
+fn cheer(who) {
+  # 自分より前に定義された関数だけ呼べる (再帰・前方参照は不可)
+  return greet(who, "Bravo")
+}
+
+print "== greet =="
+
+# リストの for: 反復変数は Text 型
+for name in ["Alice", "Bob", "Chika"] {
+  greet(name, "Hello")
+}
+
+# 整数レンジの for (両端を含む) + if / else
+for i in 1 to 5 {
+  let rem = i % 2
+  if rem == 0 {
+    print "{i} は偶数"
+  } else {
+    print "{i} は奇数"
+  }
+}
+
+# 関数の戻り値は Status (Int)。let で受けてから判定する
+let st = cheer("team")
+if st == 0 {
+  print "cheer ok"
+}
+
+print "== greet done =="
+exit 0
