@@ -98,6 +98,7 @@ make install   # リリースビルドして /usr/local/bin へコピー
 applows build input.aplo [-o out.bat]              # ポリグロット .bat へコンパイル
 applows check input.aplo                           # コンパイル可否のみ検査 (出力なし)
 applows emit  input.aplo --target sh|powershell|ir # 中間生成物を表示
+applows install-skill [--target claude|codex|all]  # AI エージェント用の言語スキルをインストール
 ```
 
 ### `applows build`
@@ -120,6 +121,24 @@ macOS/Unix では `build` が実行ビットも立てるため、`./out.bat` で
 | `--target sh` | sh ペイロードを表示 |
 | `--target powershell` | PowerShell ペイロードを表示 |
 | `--target ir` | コンパイラ IR を表示 (デバッグ用) |
+
+### `applows install-skill`
+
+AI コーディングアシスタントが Applows を正しく書けるようにする**スキル**をインストールします。
+自己完結した `SKILL.md` と完全な言語リファレンス (`reference/language.md`) をエージェントの
+スキルディレクトリへ配置するので、Claude Code や Codex がクロス OS で正しい `.aplo` を
+書けるようになります。
+
+| オプション | 説明 |
+|-----------|------|
+| `--target claude\|codex\|all` | Claude Code (`~/.claude/skills/applows/`) / Codex CLI (`~/.codex/skills/applows/`) / 両方。既定: `claude` |
+| `--dir <path>` | `<path>/applows/` へ直接インストール (プロジェクト内の `.claude/skills` 等)。`--target` は無視 |
+
+```bash
+applows install-skill                 # ~/.claude/skills/applows/
+applows install-skill --target all    # Claude Code + Codex CLI
+applows install-skill --dir .claude/skills   # プロジェクト内
+```
 
 `-h, --help` と `-V, --version` はすべてのコマンドで使用できます。
 

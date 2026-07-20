@@ -42,6 +42,15 @@ enum Command {
         #[arg(long, value_enum)]
         target: EmitTarget,
     },
+    /// AI エージェント (Claude Code / Codex) 用の Applows 言語スキルをインストールする
+    InstallSkill {
+        /// インストール先: claude / codex / all
+        #[arg(long, default_value = "claude")]
+        target: String,
+        /// インストール先ディレクトリを直接指定 (例: プロジェクトの .claude/skills)。指定時は --target を無視
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -96,6 +105,10 @@ fn run(cli: Cli) -> Result<(), String> {
                 EmitTarget::Powershell => print!("{}", result.ps_payload),
                 EmitTarget::Ir => println!("{:#?}", result.ir),
             }
+            Ok(())
+        }
+        Command::InstallSkill { target, dir } => {
+            applows::skill::install(&target, dir.as_deref())?;
             Ok(())
         }
     }

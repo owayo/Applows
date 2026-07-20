@@ -98,6 +98,7 @@ Download from [GitHub Releases](https://github.com/owayo/Applows/releases).
 applows build input.aplo [-o out.bat]              # compile to a polyglot .bat
 applows check input.aplo                           # compile check only (no output)
 applows emit  input.aplo --target sh|powershell|ir # print an intermediate artifact
+applows install-skill [--target claude|codex|all]  # install the AI-agent language skill
 ```
 
 ### `applows build`
@@ -120,6 +121,24 @@ Compiles and reports errors without writing anything. Exits with code 0 on succe
 | `--target sh` | Print the sh payload |
 | `--target powershell` | Print the PowerShell payload |
 | `--target ir` | Print the compiler IR (for debugging) |
+
+### `applows install-skill`
+
+Installs an AI-agent skill that teaches a coding assistant how to write Applows.
+It drops a self-contained `SKILL.md` plus the full language reference
+(`reference/language.md`) into the agent's skills directory, so tools like
+Claude Code or Codex can write correct, cross-OS `.aplo` programs.
+
+| Option | Description |
+|--------|-------------|
+| `--target claude\|codex\|all` | Install for Claude Code (`~/.claude/skills/applows/`), Codex CLI (`~/.codex/skills/applows/`), or both. Default: `claude` |
+| `--dir <path>` | Install into `<path>/applows/` directly (e.g. a project-local `.claude/skills`); ignores `--target` |
+
+```bash
+applows install-skill                 # ~/.claude/skills/applows/
+applows install-skill --target all    # Claude Code + Codex CLI
+applows install-skill --dir .claude/skills   # project-local
+```
 
 `-h, --help` and `-V, --version` are available on all commands.
 
