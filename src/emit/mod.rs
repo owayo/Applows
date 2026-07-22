@@ -1,5 +1,6 @@
 //! コード生成バックエンド。Core IR を各ターゲット構文へ変換する。
 
+mod common;
 pub mod escape;
 pub mod powershell;
 pub mod sh;

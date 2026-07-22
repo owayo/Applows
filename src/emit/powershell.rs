@@ -11,6 +11,7 @@
 
 use crate::ast::{ArithOp, CmpOp};
 use crate::builtins::Builtin;
+use crate::emit::common::{arith_op, literal_name, num_op};
 use crate::emit::escape::ps_lit;
 use crate::ir::{Cond, IrFunc, IrProgram, IrStmt, List, StrPart, Value};
 
@@ -489,41 +490,11 @@ fn render_str(parts: &[StrPart]) -> String {
     format!("({})", terms.join(" + "))
 }
 
-fn literal_name(value: &Value) -> String {
-    if let Value::Str(parts) = value
-        && let [StrPart::Lit(s)] = parts.as_slice()
-    {
-        return s.clone();
-    }
-    "APPLOWS_UNKNOWN".to_string()
-}
-
 /// 算術式を PowerShell へ。除算だけは特別扱い: PowerShell の `/` は浮動小数除算のため、
 /// sh の整数除算 (0 方向への切り捨て) に合わせて `[long][math]::Truncate(...)` を使う。
 fn ps_arith(op: ArithOp, l: &str, r: &str) -> String {
     match op {
         ArithOp::Div => format!("[long][math]::Truncate([double]{l} / [double]{r})"),
         _ => format!("({l} {} {r})", arith_op(op)),
-    }
-}
-
-fn arith_op(op: ArithOp) -> &'static str {
-    match op {
-        ArithOp::Add => "+",
-        ArithOp::Sub => "-",
-        ArithOp::Mul => "*",
-        ArithOp::Div => "/",
-        ArithOp::Mod => "%",
-    }
-}
-
-fn num_op(op: CmpOp) -> &'static str {
-    match op {
-        CmpOp::Eq => "-eq",
-        CmpOp::Ne => "-ne",
-        CmpOp::Lt => "-lt",
-        CmpOp::Le => "-le",
-        CmpOp::Gt => "-gt",
-        CmpOp::Ge => "-ge",
     }
 }

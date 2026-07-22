@@ -6,8 +6,9 @@
 //! - 文字列補間は single quote リテラルと `"$var"` の連結で組み立てる。
 //! - `arg()` / `args()` / `argc()` はトップレベル (= スクリプト引数) 前提 (sema が関数内使用を禁止)。
 
-use crate::ast::{ArithOp, CmpOp};
+use crate::ast::CmpOp;
 use crate::builtins::Builtin;
+use crate::emit::common::{arith_op, literal_name, num_op};
 use crate::emit::escape::sh_lit;
 use crate::ir::{Cond, IrFunc, IrProgram, IrStmt, List, StrPart, Value};
 
@@ -226,7 +227,7 @@ impl Sh {
             Builtin::WriteText => {
                 let path = self.materialize(&args[0], pre);
                 let content = self.materialize(&args[1], pre);
-                self.emit_pre(&pre.clone());
+                self.emit_pre(pre);
                 pre.clear();
                 let d = self.fresh_temp();
                 self.line(&format!("{d}={path}"));
@@ -237,20 +238,20 @@ impl Sh {
             Builtin::AppendText => {
                 let path = self.materialize(&args[0], pre);
                 let content = self.materialize(&args[1], pre);
-                self.emit_pre(&pre.clone());
+                self.emit_pre(pre);
                 pre.clear();
                 self.line(&format!("printf '%s' {content} >> {path}"));
             }
             Builtin::Copy => {
                 let from = self.materialize(&args[0], pre);
                 let to = self.materialize(&args[1], pre);
-                self.emit_pre(&pre.clone());
+                self.emit_pre(pre);
                 pre.clear();
                 self.line(&format!("cp -f -- {from} {to}"));
             }
             Builtin::Remove => {
                 let path = self.materialize(&args[0], pre);
-                self.emit_pre(&pre.clone());
+                self.emit_pre(pre);
                 pre.clear();
                 self.line(&format!("rm -f -- {path}"));
             }
@@ -472,37 +473,6 @@ fn render_str(parts: &[StrPart]) -> String {
         }
     }
     out
-}
-
-/// env の第 1 引数 (リテラル文字列) から環境変数名を取り出す。
-fn literal_name(value: &Value) -> String {
-    if let Value::Str(parts) = value
-        && let [StrPart::Lit(s)] = parts.as_slice()
-    {
-        return s.clone();
-    }
-    "APPLOWS_UNKNOWN".to_string()
-}
-
-fn arith_op(op: ArithOp) -> &'static str {
-    match op {
-        ArithOp::Add => "+",
-        ArithOp::Sub => "-",
-        ArithOp::Mul => "*",
-        ArithOp::Div => "/",
-        ArithOp::Mod => "%",
-    }
-}
-
-fn num_op(op: CmpOp) -> &'static str {
-    match op {
-        CmpOp::Eq => "-eq",
-        CmpOp::Ne => "-ne",
-        CmpOp::Lt => "-lt",
-        CmpOp::Le => "-le",
-        CmpOp::Gt => "-gt",
-        CmpOp::Ge => "-ge",
-    }
 }
 
 /// 文列で代入されるすべての変数スロットを収集する (関数内 local 宣言用)。
