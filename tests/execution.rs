@@ -34,9 +34,20 @@ fn build_temp(src: &str) -> PathBuf {
 
 /// 指定シェルで実行し (stdout, exit_code) を返す。
 fn run(shell: &str, script: &PathBuf, args: &[&str]) -> (String, i32) {
+    run_with_env(shell, script, args, &[])
+}
+
+/// 環境変数を追加指定して実行し (stdout, exit_code) を返す。
+fn run_with_env(
+    shell: &str,
+    script: &PathBuf,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> (String, i32) {
     let out = Command::new(shell)
         .arg(script)
         .args(args)
+        .envs(envs.iter().copied())
         .output()
         .unwrap_or_else(|e| panic!("{shell} の起動に失敗: {e}"));
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -131,6 +142,84 @@ fn special_characters_roundtrip() {
     let script = build_temp(src);
     let (out, _) = run_both(&script, &[]);
     assert_eq!(out, "it's $HOME & 100% <ok> 日本語 🌏\n");
+}
+
+#[test]
+fn string_builtins_roundtrip() {
+    let src = "let u = upper(\"MixedCase abc\")\nlet l = lower(\"MixedCase ABC\")\nlet t = trim(\"  padded  \")\nprint \"u={u}\"\nprint \"l={l}\"\nprint \"t=[{t}]\"\n";
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(out, "u=MIXEDCASE ABC\nl=mixedcase abc\nt=[padded]\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn env_reads_variable_and_falls_back() {
+    let src = "let v = env(\"APPLOWS_TEST_VAR\", \"fallback\")\nprint \"v={v}\"\n";
+    let script = build_temp(src);
+    // 未設定ならデフォルト値
+    let (out, _) = run("/bin/sh", &script, &[]);
+    assert_eq!(out, "v=fallback\n");
+    // 設定済みならその値
+    let (out, _) = run_with_env(
+        "/bin/sh",
+        &script,
+        &[],
+        &[("APPLOWS_TEST_VAR", "set-value")],
+    );
+    assert_eq!(out, "v=set-value\n");
+    // 空文字列に設定されている場合は空のまま採用する (sh の :- ではなく - 相当の意味論)
+    let (out, _) = run_with_env("/bin/sh", &script, &[], &[("APPLOWS_TEST_VAR", "")]);
+    assert_eq!(out, "v=\n");
+}
+
+#[test]
+fn file_predicates_and_copy() {
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let pid = std::process::id();
+    let base = std::env::temp_dir();
+    let f = base.join(format!("applows_pred_{pid}_{n}.txt"));
+    let g = base.join(format!("applows_pred_copy_{pid}_{n}.txt"));
+    let (fp, gp) = (f.display().to_string(), g.display().to_string());
+    let src = format!(
+        "write_text(\"{fp}\", \"x\")\nif exists(\"{fp}\") {{\n  print \"exists-ok\"\n}}\nif is_file(\"{fp}\") {{\n  print \"isfile-ok\"\n}}\nif is_dir(\"{fp}\") {{\n  print \"isdir-wrong\"\n}} else {{\n  print \"isdir-not-file\"\n}}\ncopy(\"{fp}\", \"{gp}\")\nlet c = read_text(\"{gp}\")\nprint \"copied={{c}}\"\nremove(\"{fp}\")\nremove(\"{gp}\")\nif exists(\"{fp}\") {{\n  print \"remove-failed\"\n}} else {{\n  print \"removed\"\n}}\n"
+    );
+    let script = build_temp(&src);
+    let (out, code) = run("/bin/sh", &script, &[]);
+    assert_eq!(
+        out,
+        "exists-ok\nisfile-ok\nisdir-not-file\ncopied=x\nremoved\n"
+    );
+    assert_eq!(code, 0);
+    assert!(!f.exists() && !g.exists());
+}
+
+#[test]
+fn string_equality_is_case_sensitive() {
+    // PowerShell の -eq は大文字小文字を無視するため -ceq へ揃えている。
+    // sh 側の実行でも大文字小文字を区別することを固定する。
+    let src = "if \"abc\" == \"ABC\" {\n  print \"insensitive\"\n} else {\n  print \"sensitive\"\n}\nif \"x\" != \"y\" {\n  print \"neq-ok\"\n}\n";
+    let script = build_temp(src);
+    let (out, _) = run_both(&script, &[]);
+    assert_eq!(out, "sensitive\nneq-ok\n");
+}
+
+#[test]
+fn logic_operators_and_else_if() {
+    let src = "let s = \"b\"\nif s == \"a\" {\n  print \"is-a\"\n} else if s == \"b\" {\n  print \"is-b\"\n} else {\n  print \"other\"\n}\nif 1 == 1 and 2 == 2 {\n  print \"and-ok\"\n}\nif 1 == 2 or 2 == 2 {\n  print \"or-ok\"\n}\nif not 1 == 2 {\n  print \"not-ok\"\n}\n";
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(out, "is-b\nand-ok\nor-ok\nnot-ok\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn negative_division_truncates_toward_zero() {
+    // sh の $(( )) と PowerShell の [math]::Truncate で 0 方向への切り捨てに揃えている。
+    let src = "let neg = 0 - 7\nlet q = neg / 2\nlet m = neg % 2\nprint \"q={q} m={m}\"\n";
+    let script = build_temp(src);
+    let (out, _) = run_both(&script, &[]);
+    assert_eq!(out, "q=-3 m=-1\n");
 }
 
 #[test]

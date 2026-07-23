@@ -86,6 +86,19 @@ fn string_escapes() {
 }
 
 #[test]
+fn ps_string_comparison_is_case_sensitive() {
+    // PS の -eq / -ne は大文字小文字を無視するため、-ceq / -cne を使う
+    let r = ok("if \"a\" == \"A\" {\n  print \"eq\"\n}\nif \"a\" != \"b\" {\n  print \"ne\"\n}\n");
+    assert!(r.ps_payload.contains("-ceq"), "ps:\n{}", r.ps_payload);
+    assert!(r.ps_payload.contains("-cne"), "ps:\n{}", r.ps_payload);
+    assert!(
+        !r.ps_payload.contains("-eq ") && !r.ps_payload.contains("-ne "),
+        "case-insensitive 比較を使ってはならない:\n{}",
+        r.ps_payload
+    );
+}
+
+#[test]
 fn comments_ignored() {
     let r = ok("# leading comment\nprint \"x\"  # trailing comment\n# trailing full line\n");
     assert!(r.sh_payload.contains("printf '%s\\n' 'x'"));

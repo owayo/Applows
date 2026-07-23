@@ -189,6 +189,38 @@ fn discard_pure_value_rejected() {
     err_contains("upper(\"x\")\n", "戻り値");
 }
 
+// ---- 失敗ケース (字句・構文) ----
+
+#[test]
+fn unterminated_string_error() {
+    err_contains("print \"unterminated\n", "閉じられていません");
+}
+
+#[test]
+fn unknown_escape_error() {
+    err_contains("print \"bad \\q escape\"\n", "未知のエスケープ");
+}
+
+#[test]
+fn int_literal_overflow_error() {
+    err_contains("let x = 99999999999999999999999\n", "大きすぎます");
+}
+
+#[test]
+fn unexpected_char_error() {
+    err_contains("let x = 1 @ 2\n", "予期しない文字");
+}
+
+#[test]
+fn unclosed_block_error() {
+    err_contains("if 1 == 1 {\n  print \"x\"\n", "入力の終端");
+}
+
+#[test]
+fn keyword_as_variable_name_error() {
+    err_contains("let for = 1\n", "識別子を期待");
+}
+
 // ---- スコープ: 関数内から外側変数は見えない ----
 
 #[test]
