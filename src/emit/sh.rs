@@ -11,6 +11,7 @@ use crate::builtins::Builtin;
 use crate::emit::common::{arith_op, literal_name, num_op};
 use crate::emit::escape::sh_lit;
 use crate::ir::{Cond, IrFunc, IrProgram, IrStmt, List, StrPart, Value};
+use std::collections::HashSet;
 
 pub fn emit_sh(program: &IrProgram) -> String {
     let mut e = Sh {
@@ -55,9 +56,11 @@ impl Sh {
         }
         // 本体で代入される変数をすべて local 宣言 (外側との分離)
         let mut assigned = Vec::new();
-        collect_assigned(&func.body, &mut assigned);
+        let mut assigned_seen = HashSet::new();
+        collect_assigned(&func.body, &mut assigned, &mut assigned_seen);
+        let params: HashSet<&str> = func.params.iter().map(String::as_str).collect();
         for v in assigned {
-            if !func.params.contains(&v) {
+            if !params.contains(v) {
                 self.line(&format!("local {v}"));
             }
         }
@@ -476,33 +479,33 @@ fn render_str(parts: &[StrPart]) -> String {
 }
 
 /// 文列で代入されるすべての変数スロットを収集する (関数内 local 宣言用)。
-fn collect_assigned(stmts: &[IrStmt], out: &mut Vec<String>) {
+fn collect_assigned<'a>(stmts: &'a [IrStmt], out: &mut Vec<&'a str>, seen: &mut HashSet<&'a str>) {
     for s in stmts {
         match s {
-            IrStmt::Let { var, .. } => push_unique(out, var),
+            IrStmt::Let { var, .. } => push_unique(out, seen, var),
             IrStmt::ForRange { var, body, .. } | IrStmt::ForEach { var, body, .. } => {
-                push_unique(out, var);
-                collect_assigned(body, out);
+                push_unique(out, seen, var);
+                collect_assigned(body, out, seen);
             }
             IrStmt::If {
                 branches,
                 otherwise,
             } => {
                 for (_, body) in branches {
-                    collect_assigned(body, out);
+                    collect_assigned(body, out, seen);
                 }
                 if let Some(b) = otherwise {
-                    collect_assigned(b, out);
+                    collect_assigned(b, out, seen);
                 }
             }
-            IrStmt::While { body, .. } => collect_assigned(body, out),
+            IrStmt::While { body, .. } => collect_assigned(body, out, seen),
             _ => {}
         }
     }
 }
 
-fn push_unique(out: &mut Vec<String>, v: &str) {
-    if !out.iter().any(|x| x == v) {
-        out.push(v.to_string());
+fn push_unique<'a>(out: &mut Vec<&'a str>, seen: &mut HashSet<&'a str>, v: &'a str) {
+    if seen.insert(v) {
+        out.push(v);
     }
 }

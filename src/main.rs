@@ -89,7 +89,7 @@ fn run(cli: Cli) -> Result<(), String> {
             let out_path = output.unwrap_or_else(|| default_output(&input));
             std::fs::write(&out_path, result.output.as_bytes())
                 .map_err(|e| format!("出力の書き込みに失敗しました {}: {e}", out_path.display()))?;
-            set_executable(&out_path);
+            set_executable(&out_path)?;
             eprintln!("compiled: {} -> {}", input.display(), out_path.display());
             Ok(())
         }
@@ -127,14 +127,51 @@ fn default_output(input: &Path) -> PathBuf {
 
 /// macOS/Unix では実行ビットを立て、`./out.bat` で直接起動できるようにする。
 #[cfg(unix)]
-fn set_executable(path: &Path) {
+fn set_executable(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = std::fs::metadata(path) {
-        let mut perms = meta.permissions();
-        perms.set_mode(perms.mode() | 0o755);
-        let _ = std::fs::set_permissions(path, perms);
-    }
+
+    let meta = std::fs::metadata(path).map_err(|e| {
+        format!(
+            "出力ファイルの権限取得に失敗しました {}: {e}",
+            path.display()
+        )
+    })?;
+    let mut perms = meta.permissions();
+    perms.set_mode(perms.mode() | 0o100);
+    std::fs::set_permissions(path, perms).map_err(|e| {
+        format!(
+            "出力ファイルへの実行権限付与に失敗しました {}: {e}",
+            path.display()
+        )
+    })
 }
 
 #[cfg(not(unix))]
-fn set_executable(_path: &Path) {}
+fn set_executable(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::set_executable;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn set_executable_preserves_restricted_permissions() {
+        let path =
+            std::env::temp_dir().join(format!("applows-set-executable-{}", std::process::id()));
+        std::fs::write(&path, b"test").expect("テストファイルを書き込める");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("事前の権限を設定できる");
+
+        set_executable(&path).expect("実行権限を付与できる");
+
+        let mode = std::fs::metadata(&path)
+            .expect("付与後の権限を取得できる")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
+        std::fs::remove_file(path).expect("テストファイルを削除できる");
+    }
+}

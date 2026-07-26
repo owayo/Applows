@@ -13,7 +13,8 @@ pub struct Token {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokKind {
     // リテラル
-    Int(i64),
+    /// 符号なしのリテラル絶対値。単項マイナスは構文解析で適用する。
+    Int(u64),
     /// 文字列リテラル (補間パーツに分解済み)。
     Str(Vec<StrPart>),
     Ident(String),

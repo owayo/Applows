@@ -133,9 +133,15 @@ impl Lexer {
                 break;
             }
         }
-        let value: i64 = text
+        let value: u64 = text
             .parse()
             .map_err(|_| Diagnostic::error(format!("整数リテラルが大きすぎます: {text}"), start))?;
+        if value > i64::MAX as u64 + 1 {
+            return Err(Diagnostic::error(
+                format!("整数リテラルが大きすぎます: {text}"),
+                start,
+            ));
+        }
         Ok(Token {
             kind: TokKind::Int(value),
             span: start,

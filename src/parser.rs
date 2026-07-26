@@ -1,19 +1,38 @@
 //! 構文解析。トークン列から Source AST を構築する再帰下降パーサ。
 //!
 //! 式は優先順位登り法 (Pratt 風) で解析する。優先順位 (低い順):
-//! `or` < `and` < 比較 < `+ -` < `* /` `%` < 単項 `- not` < 一次式。
+//! `or` < `and` < `not` < 比較 < `+ -` < `* /` `%` < 単項 `-` < 一次式。
 
 use crate::ast::*;
 use crate::diagnostic::Diagnostic;
 use crate::token::{TokKind, Token};
 
+/// 再帰下降の深さ上限。ネストの深い入力によるスタックオーバーフロー
+/// (プロセス abort) を防ぎ、診断として報告するための保険。
+const MAX_NEST: usize = 256;
+/// 単一の式に含められる複合ノード数の上限。
+const MAX_EXPR_NODES: usize = 256;
+
 pub fn parse(tokens: Vec<Token>) -> Result<Program, Diagnostic> {
-    Parser { tokens, pos: 0 }.parse_program()
+    Parser {
+        tokens,
+        pos: 0,
+        depth: 0,
+        expr_level: 0,
+        expr_nodes: 0,
+    }
+    .parse_program()
 }
 
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    /// 現在の再帰深度 (`MAX_NEST` 超過で診断エラー)。
+    depth: usize,
+    /// 現在解析している式の `parse_expr` 呼び出し階層。
+    expr_level: usize,
+    /// 1 つの式に含まれる、再帰的な走査を必要とする複合ノード数。
+    expr_nodes: usize,
 }
 
 impl Parser {
@@ -63,11 +82,56 @@ impl Parser {
         }
     }
 
+    /// 再帰深度を 1 段深くする。上限超過なら診断エラー。
+    fn enter_nest(&mut self) -> Result<(), Diagnostic> {
+        self.depth += 1;
+        if self.depth > MAX_NEST {
+            Err(Diagnostic::error(
+                format!("ネストが深すぎます (上限 {MAX_NEST})"),
+                self.peek_span(),
+            )
+            .with_note("式・ブロックの入れ子を浅くする"))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// 意味解析・コード生成で再帰する式ノード数を制限する。
+    fn record_expr_node(&mut self) -> Result<(), Diagnostic> {
+        self.expr_nodes += 1;
+        if self.expr_nodes > MAX_EXPR_NODES {
+            Err(Diagnostic::error(
+                format!("式が複雑すぎます (複合要素の上限 {MAX_EXPR_NODES})"),
+                self.peek_span(),
+            )
+            .with_note("演算や呼び出しを複数の let 文へ分割する"))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// 文の直後が文終端 (改行 / `}` / EOF) であることを検査する (1 行 1 文の強制)。
+    fn expect_stmt_end(&mut self) -> Result<(), Diagnostic> {
+        if self.stmt_ends() {
+            Ok(())
+        } else {
+            Err(Diagnostic::error(
+                format!(
+                    "文の終わり (改行) を期待しましたが {} が見つかりました",
+                    self.peek().describe()
+                ),
+                self.peek_span(),
+            )
+            .with_note("文は 1 行 1 文"))
+        }
+    }
+
     fn parse_program(&mut self) -> Result<Program, Diagnostic> {
         let mut stmts = Vec::new();
         self.skip_newlines();
         while !matches!(self.peek(), TokKind::Eof) {
             stmts.push(self.parse_stmt()?);
+            self.expect_stmt_end()?;
             self.skip_newlines();
         }
         Ok(Program { stmts })
@@ -79,6 +143,7 @@ impl Parser {
         self.skip_newlines();
         while !matches!(self.peek(), TokKind::RBrace | TokKind::Eof) {
             stmts.push(self.parse_stmt()?);
+            self.expect_stmt_end()?;
             self.skip_newlines();
         }
         self.expect(&TokKind::RBrace)?;
@@ -86,6 +151,13 @@ impl Parser {
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt, Diagnostic> {
+        self.enter_nest()?;
+        let result = self.parse_stmt_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_stmt_inner(&mut self) -> Result<Stmt, Diagnostic> {
         let span = self.peek_span();
         match self.peek() {
             TokKind::Let => self.parse_let(span),
@@ -241,7 +313,15 @@ impl Parser {
     // ---- 式 (優先順位登り法) ----
 
     fn parse_expr(&mut self) -> Result<Expr, Diagnostic> {
-        self.parse_or()
+        if self.expr_level == 0 {
+            self.expr_nodes = 0;
+        }
+        self.enter_nest()?;
+        self.expr_level += 1;
+        let result = self.parse_or();
+        self.expr_level -= 1;
+        self.depth -= 1;
+        result
     }
 
     fn parse_or(&mut self) -> Result<Expr, Diagnostic> {
@@ -250,6 +330,7 @@ impl Parser {
             let span = self.peek_span();
             self.bump();
             let right = self.parse_and()?;
+            self.record_expr_node()?;
             left = Expr::Logic {
                 op: LogicOp::Or,
                 left: Box::new(left),
@@ -266,6 +347,7 @@ impl Parser {
             let span = self.peek_span();
             self.bump();
             let right = self.parse_not()?;
+            self.record_expr_node()?;
             left = Expr::Logic {
                 op: LogicOp::And,
                 left: Box::new(left),
@@ -280,7 +362,12 @@ impl Parser {
         if matches!(self.peek(), TokKind::Not) {
             let span = self.peek_span();
             self.bump();
-            let expr = self.parse_not()?;
+            // `not not ...` の連鎖は parse_expr を経由しない直接再帰のため個別に深さを数える
+            self.enter_nest()?;
+            let expr = self.parse_not();
+            self.depth -= 1;
+            let expr = expr?;
+            self.record_expr_node()?;
             Ok(Expr::Not {
                 expr: Box::new(expr),
                 span,
@@ -314,6 +401,7 @@ impl Parser {
                     .with_note("`a < b and b < c` のように分ける"),
             );
         }
+        self.record_expr_node()?;
         Ok(Expr::Cmp {
             op,
             numeric: false,
@@ -334,6 +422,7 @@ impl Parser {
             let span = self.peek_span();
             self.bump();
             let right = self.parse_mul()?;
+            self.record_expr_node()?;
             left = Expr::Arith {
                 op,
                 left: Box::new(left),
@@ -356,6 +445,7 @@ impl Parser {
             let span = self.peek_span();
             self.bump();
             let right = self.parse_unary()?;
+            self.record_expr_node()?;
             left = Expr::Arith {
                 op,
                 left: Box::new(left),
@@ -370,7 +460,19 @@ impl Parser {
         if matches!(self.peek(), TokKind::Minus) {
             let span = self.peek_span();
             self.bump();
-            let expr = self.parse_unary()?;
+            if matches!(self.peek(), TokKind::Int(value) if *value == i64::MAX as u64 + 1) {
+                self.bump();
+                return Ok(Expr::Int {
+                    value: i64::MIN,
+                    span,
+                });
+            }
+            // `- - ...` の連鎖は parse_expr を経由しない直接再帰のため個別に深さを数える
+            self.enter_nest()?;
+            let expr = self.parse_unary();
+            self.depth -= 1;
+            let expr = expr?;
+            self.record_expr_node()?;
             Ok(Expr::Neg {
                 expr: Box::new(expr),
                 span,
@@ -385,6 +487,9 @@ impl Parser {
         match self.peek().clone() {
             TokKind::Int(value) => {
                 self.bump();
+                let value = i64::try_from(value).map_err(|_| {
+                    Diagnostic::error(format!("整数リテラルが大きすぎます: {value}"), span)
+                })?;
                 Ok(Expr::Int { value, span })
             }
             TokKind::Str(parts) => {
@@ -399,6 +504,7 @@ impl Parser {
                     value: if is_true { 1 } else { 0 },
                     span,
                 });
+                self.record_expr_node()?;
                 Ok(Expr::Cmp {
                     op: CmpOp::Eq,
                     numeric: true,
@@ -411,6 +517,7 @@ impl Parser {
                 self.bump();
                 if self.eat(&TokKind::LParen) {
                     let args = self.parse_call_args()?;
+                    self.record_expr_node()?;
                     Ok(Expr::Call { name, args, span })
                 } else {
                     Ok(Expr::Var { name, span })
@@ -432,6 +539,7 @@ impl Parser {
                     }
                 }
                 self.expect(&TokKind::RBracket)?;
+                self.record_expr_node()?;
                 Ok(Expr::List { items, span })
             }
             other => Err(Diagnostic::error(

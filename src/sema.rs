@@ -11,7 +11,7 @@ use crate::ast::*;
 use crate::builtins::{Builtin, Type};
 use crate::diagnostic::Diagnostic;
 use crate::ir::{self, Cond, IrFunc, IrProgram, IrStmt, List, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub fn compile_to_ir(program: &Program) -> Result<IrProgram, Vec<Diagnostic>> {
     let mut lw = Lowerer::new();
@@ -258,11 +258,12 @@ impl Lowerer {
                 // 共有させる。これにより「全分岐が同型を代入する変数」を合流後に使え (仕様の
                 // `if{let s="a"}else{let s="b"}` パターン)、かつ再代入時の slot 分離も防ぐ。
                 let mut assigned = Vec::new();
+                let mut assigned_seen = HashSet::new();
                 for b in branches {
-                    collect_block_assigned_names(&b.body, &mut assigned);
+                    collect_block_assigned_names(&b.body, &mut assigned, &mut assigned_seen);
                 }
                 if let Some(e) = otherwise {
-                    collect_block_assigned_names(e, &mut assigned);
+                    collect_block_assigned_names(e, &mut assigned, &mut assigned_seen);
                 }
                 for name in &assigned {
                     self.preallocate_slot(name, scope);
@@ -504,7 +505,10 @@ impl Lowerer {
             }
             Expr::Neg { expr: inner, span } => {
                 if let Expr::Int { value, .. } = inner.as_ref() {
-                    return Ok((Value::Int(-value), Type::Int));
+                    let value = value.checked_neg().ok_or_else(|| {
+                        Diagnostic::error("符号付き 64bit 整数の範囲を超えています", *span)
+                    })?;
+                    return Ok((Value::Int(value), Type::Int));
                 }
                 let (v, t) = self.lower_value(inner, scope, fn_index)?;
                 self.expect(t, Type::Int, *span)?;
@@ -1052,30 +1056,35 @@ fn merge_branch_scopes(before: &Scope, paths: &[Scope]) -> Scope {
 
 /// ブロック (と入れ子の if/while/for 本体) で代入される変数名を集める。
 /// if の分岐前 slot 事前割り当てに使う (関数定義には降りない)。
-fn collect_block_assigned_names(stmts: &[Stmt], out: &mut Vec<String>) {
-    let push = |n: &String, out: &mut Vec<String>| {
-        if !out.contains(n) {
-            out.push(n.clone());
+fn collect_block_assigned_names<'a>(
+    stmts: &'a [Stmt],
+    out: &mut Vec<&'a str>,
+    seen: &mut HashSet<&'a str>,
+) {
+    let push = |n: &'a String, out: &mut Vec<&'a str>, seen: &mut HashSet<&'a str>| {
+        let n = n.as_str();
+        if seen.insert(n) {
+            out.push(n);
         }
     };
     for s in stmts {
         match s {
-            Stmt::Let { name, .. } => push(name, out),
+            Stmt::Let { name, .. } => push(name, out, seen),
             Stmt::For { var, body, .. } => {
-                push(var, out);
-                collect_block_assigned_names(body, out);
+                push(var, out, seen);
+                collect_block_assigned_names(body, out, seen);
             }
-            Stmt::While { body, .. } => collect_block_assigned_names(body, out),
+            Stmt::While { body, .. } => collect_block_assigned_names(body, out, seen),
             Stmt::If {
                 branches,
                 otherwise,
                 ..
             } => {
                 for b in branches {
-                    collect_block_assigned_names(&b.body, out);
+                    collect_block_assigned_names(&b.body, out, seen);
                 }
                 if let Some(e) = otherwise {
-                    collect_block_assigned_names(e, out);
+                    collect_block_assigned_names(e, out, seen);
                 }
             }
             _ => {}

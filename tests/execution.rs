@@ -119,6 +119,15 @@ fn args_and_utf8() {
 }
 
 #[test]
+fn signed_integer_boundaries() {
+    let src = "print 9223372036854775807\nprint -9223372036854775808\n";
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(out, "9223372036854775807\n-9223372036854775808\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn conditionals() {
     let src = "let x = 5\nif x > 10 {\n  print \"big\"\n} else if x > 3 {\n  print \"mid\"\n} else {\n  print \"small\"\n}\n";
     let script = build_temp(src);

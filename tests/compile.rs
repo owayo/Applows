@@ -204,6 +204,46 @@ fn unknown_escape_error() {
 #[test]
 fn int_literal_overflow_error() {
     err_contains("let x = 99999999999999999999999\n", "大きすぎます");
+    err_contains("let x = 9223372036854775808\n", "大きすぎます");
+    err_contains("let x = -9223372036854775809\n", "大きすぎます");
+    err_contains("let x = --9223372036854775808\n", "範囲を超えています");
+}
+
+#[test]
+fn signed_integer_boundaries_compile() {
+    let r = ok("print 9223372036854775807\nprint -9223372036854775808\n");
+    assert!(r.sh_payload.contains("9223372036854775807"));
+    assert!(r.sh_payload.contains("-9223372036854775808"));
+    assert!(r.ps_payload.contains("9223372036854775807"));
+    assert!(r.ps_payload.contains("-9223372036854775808"));
+}
+
+#[test]
+fn same_line_statements_are_rejected() {
+    err_contains("print \"a\" print \"b\"\n", "文の終わり");
+    err_contains("if 1 == 1 { print \"a\" } print \"b\"\n", "文の終わり");
+
+    // EOF と閉じ波括弧は文の終端として扱う。
+    ok("print \"a\"");
+    ok("if 1 == 1 { print \"a\" }");
+}
+
+#[test]
+fn excessive_nesting_is_reported() {
+    let moderate = format!("if {}1 == 1 {{ print \"x\" }}\n", "not ".repeat(64));
+    ok(&moderate);
+
+    let excessive = format!("if {}1 == 1 {{ print \"x\" }}\n", "not ".repeat(300));
+    err_contains(&excessive, "ネストが深すぎます");
+}
+
+#[test]
+fn excessive_operator_chain_is_reported() {
+    let moderate = format!("let x = 1{}\n", " + 1".repeat(64));
+    ok(&moderate);
+
+    let excessive = format!("let x = 1{}\n", " + 1".repeat(300));
+    err_contains(&excessive, "式が複雑すぎます");
 }
 
 #[test]

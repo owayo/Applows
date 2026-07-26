@@ -59,6 +59,7 @@ The full design — compilation pipeline, escaping strategy, and post-build stru
 - **Unicode-safe on Windows** — the script re-reads itself as UTF-8, so Japanese text and emoji survive Windows PowerShell 5.1
 - **Inspectable** — dump the sh payload, the PowerShell payload, or the compiler IR with `applows emit`
 - **Honest exit codes** — the script's exit status propagates to the caller on both operating systems
+- **Defensive compiler limits** — excessive nesting and recursively processed expression complexity are rejected with diagnostics instead of risking a stack-overflow abort
 
 ## Requirements
 
