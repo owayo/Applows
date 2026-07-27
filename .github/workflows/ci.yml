@@ -11,8 +11,15 @@ env:
 
 jobs:
   test:
-    name: Test & Lint
-    runs-on: ubuntu-latest
+    # tests/execution.rs は生成物を実際に /bin/sh と zsh で走らせるため macOS 専用
+    # (Debian 系の /bin/sh = dash はポリグロットヘッダの `function` を解釈できない)。
+    # ubuntu だけで回すと実行テストが 1 件も走らないので、macOS も matrix に入れる。
+    name: Test & Lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v5
 
