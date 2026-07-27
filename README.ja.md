@@ -55,6 +55,8 @@ flowchart LR
 - **構造的にインジェクション耐性** — 外部コマンドは argv 配列 (`run(["git", "--version"])`) で渡し、各要素をターゲット別にクォート。ユーザ識別子は生成コードにそのまま現れない
 - **ファイル操作** — 存在検査、読み込み・書き込み・追記・コピー・削除。書き込みはアトミック (一時ファイル + move)
 - **HTTP ダウンロード** — `http_download(url, dest)` は macOS では `curl -fSL`、Windows では `Invoke-WebRequest` に写像され、アトミックに配置される
+- **HTTP POST** — `http_post(url, headers, body)` は**両 OS とも `curl`** で送るため、実際に流れるバイト列が一致する。秘密情報はコマンドライン引数に載らず (ヘッダは mode 0600 の一時ファイル経由)、CR/LF を含むヘッダは拒否し、リダイレクトは追わない
+- **標準入力** — `read_stdin()` は両 OS でパイプ入力を UTF-8 として読み、端末に繋がっているときはブロックせず空を返す。同じ 1 ファイルがフックにもフィルタにもなる
 - **決定的な出力** — BOM 無し UTF-8・LF 固定。ビルドのたびに構造検査 (here-string 境界、ヒアドキュメント区切り、禁止行) を通す
 - **Windows でも Unicode 安全** — スクリプトが自身を UTF-8 で再読込するため、日本語や絵文字が Windows PowerShell 5.1 でも壊れない
 - **中間生成物を確認可能** — `applows emit` で sh ペイロード / PowerShell ペイロード / コンパイラ IR を表示できる
@@ -234,9 +236,11 @@ greet("team")
 | 引数・環境変数 | `args()`, `arg(i)`, `argc()`, `env(name, default)` | |
 | プロセス | `run(argv)` | argv は `List`。終了コード (`Int`) を返す |
 | ファイルシステム | `exists`, `is_file`, `is_dir`, `read_text`, `write_text`, `append_text`, `copy`, `remove` | `write_text` はアトミック (一時ファイル + move) |
-| ネットワーク | `http_download(url, dest)` | `curl -fSL` / `Invoke-WebRequest` |
+| 標準入力 | `read_stdin()` | UTF-8。端末から起動されたときはブロックせず空を返す |
+| ネットワーク | `http_download(url, dest)`, `http_post(url, headers, body)` | download: `curl -fSL` / `Invoke-WebRequest`。POST: 両 OS とも `curl`。`0` 成功 / `1` 失敗 / `2` 入力不正 |
 | テキスト | `upper`, `lower`, `trim` | |
 | スクリプト位置 | `script_path()`, `script_dir()`, `cwd()` | |
+| マシン | `hostname()` | macOS は `uname -n`、Windows は NetBIOS 名 |
 
 文法・型規則・ターゲット別写像の完全な仕様は [docs/design.md](docs/design.md) を参照してください。
 

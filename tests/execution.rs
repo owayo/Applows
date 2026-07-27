@@ -1,9 +1,14 @@
-//! 実行 E2E テスト (Unix 限定)。
+//! 実行 E2E テスト (macOS 限定)。
 //!
-//! 生成した `.bat` を macOS/Linux の `/bin/sh` と `zsh` で実際に実行し、
-//! 標準出力と終了コードを検証する。Windows PowerShell 側は CI (windows-latest) で検証する。
+//! 生成した `.bat` を `/bin/sh` と `zsh` で実際に実行し、標準出力と終了コードを検証する。
+//! Windows PowerShell 側は CI (windows-latest) で検証する。
+//!
+//! Applows がサポートする Unix ターゲットは **macOS の `/bin/sh` (bash) と zsh** であり、
+//! Linux は対象外 (ポリグロットヘッダが `function` キーワードを使うため、Debian 系の
+//! `/bin/sh` = dash では解釈できない。README の Limitations 参照)。
+//! そのため実行テストは macOS でのみ動かす。CI は macos-latest でこのテストを実行する。
 
-#![cfg(unix)]
+#![cfg(target_os = "macos")]
 
 use applows::compile;
 use std::path::PathBuf;

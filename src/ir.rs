@@ -80,6 +80,13 @@ pub enum Value {
     Run {
         argv: List,
     },
+    /// HTTP POST。`0`=成功 / `1`=通信・HTTP 失敗 / `2`=入力不正 を返す。
+    /// ヘッダだけがリストなので `Value::Builtin` に載せられず、`Run` と同様に専用の枝を持つ。
+    HttpPost {
+        url: Box<Value>,
+        headers: List,
+        body: Box<Value>,
+    },
     /// 値を返す組み込み (env / read_text / upper / http_download / arg / argc / script_* / cwd ...)。
     Builtin {
         builtin: Builtin,

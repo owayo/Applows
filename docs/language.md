@@ -578,17 +578,20 @@ if os == "Windows_NT" {
 | `is_file(path)` | Text | Bool | 条件 | 通常ファイルとして存在するか |
 | `is_dir(path)` | Text | Bool | 条件 | ディレクトリとして存在するか |
 | `read_text(path)` | Text | Text | 値 | ファイル全体を UTF-8 テキストとして読む |
+| `read_stdin()` | — | Text | 値 | 標準入力を UTF-8 テキストとして最後まで読む |
 | `write_text(path, text)` | Text, Text | — | 文 | テキストを UTF-8 (BOM 無し) で書く。原子的置換 |
 | `append_text(path, text)` | Text, Text | — | 文 | テキストを末尾へ追記 (ファイルが無ければ作成) |
 | `copy(from, to)` | Text, Text | — | 文 | ファイルをコピー (上書き) |
 | `remove(path)` | Text | — | 文 | ファイルを削除 |
 | `http_download(url, dest)` | Text, Text | Int | 値 / 文 | URL をファイルへダウンロード。成功 0 / 失敗 1 |
+| `http_post(url, headers, body)` | Text, List, Text | Int | 値 / 文 | JSON 等を POST する。0 成功 / 1 失敗 / 2 入力不正 |
 | `upper(s)` | Text | Text | 値 | 大文字化 |
 | `lower(s)` | Text | Text | 値 | 小文字化 |
 | `trim(s)` | Text | Text | 値 | 先頭・末尾の空白 (スペース/タブ/改行) を除去 |
 | `script_path()` | — | Text | 値 | 実行中のスクリプト自身のパス |
 | `script_dir()` | — | Text | 値 | スクリプトのあるディレクトリ (絶対パス) |
 | `cwd()` | — | Text | 値 | 呼び出し元の現在の作業ディレクトリ |
+| `hostname()` | — | Text | 値 | 実行しているマシンのホスト名 |
 
 文脈の規則はコンパイラが検査します:
 
@@ -635,6 +638,18 @@ for a in args() {
 
 - Windows では引数が cmd を経由して転送されるため、一部の記号を含む引数に制限がある ([16 章](#16-既知の制限))。
 
+#### `hostname() -> Text`
+
+実行しているマシンのホスト名を返す。
+
+- macOS は `uname -n` (FQDN 形式の `host.local` になることがある)、Windows は `[System.Net.Dns]::GetHostName()` (NetBIOS 名。ドメイン部を含まない) を使う。**両 OS で同じ表記になるとは限らない**ので、表示や集計キーに使う場合はその前提で扱う。
+- 取得に失敗した場合は空文字列を返す。
+
+```applows
+let host = hostname()
+print "host={host}"
+```
+
 ### ファイル判定
 
 #### `exists(path) -> Bool` / `is_file(path) -> Bool` / `is_dir(path) -> Bool`
@@ -663,6 +678,23 @@ if not is_file("settings.conf") {
 if is_file("version.txt") {
   let version = trim(read_text("version.txt"))
   print "version={version}"
+}
+```
+
+#### `read_stdin() -> Text`
+
+標準入力を UTF-8 テキストとして最後まで読む。パイプで JSON を受け取るフック / フィルタ用途を想定している。
+
+- **標準入力がリダイレクトされていないとき (端末から起動されたとき) は、待たずに空文字列を返す**。macOS は `[ -t 0 ]`、Windows は `[Console]::IsInputRedirected` で判定する。
+- **副作用のある呼び出し**として扱われる。標準入力は一度しか読めないため、`and` / `or` / `not` の内側には書けない。`let` で受けてから使うこと。
+- macOS では末尾の改行が取り除かれ、Windows では保持される (`read_text` と同じ差)。JSON のように末尾改行に意味が無い入力なら影響しない。
+- Windows でも UTF-8 として読む (既定の OEM コードページではない)。
+
+```applows
+let body = read_stdin()
+if body == "" {
+  print "no input"
+  exit 0
 }
 ```
 
@@ -714,6 +746,30 @@ let rc = http_download("https://example.com/tool/config.txt", "config.txt")
 if rc != 0 {
   print "download failed"
   exit 1
+}
+```
+
+#### `http_post(url, headers, body) -> Int`
+
+`body` を `url` へ POST する。戻り値は **`0` = 成功 (2xx) / `1` = 通信または HTTP エラー / `2` = 入力不正 (ヘッダが不正・一時ファイルを作れない)**。
+
+- `headers` は `run` の argv と同じ **リスト** で、`"名前: 値"` の形の要素を並べる。リストは変数へ入れられないため、リテラル (または `args()`) を直接書く。値には変数を補間できる。
+- **秘密情報 (API キー等) はコマンドライン引数に載らない**。ヘッダは mode 0600 の一時ファイルへ書き、`curl --header @file` で渡すため、`ps` で他のユーザーから読まれることがない。body も一時ファイル経由で送る。
+- **CR / LF / NUL を含むヘッダは送信せず `2` を返す** (ヘッダインジェクション防止)。
+- **リダイレクトは追わない** (`--location` を付けない)。リダイレクト先へ `Authorization` を渡さないため。
+- タイムアウトは 30 秒。失敗の理由は curl が標準エラー出力へ書く。
+- **両 OS とも `curl` を使う** — macOS は標準搭載の `curl`、Windows は同梱の `curl.exe` (Windows 10 1803 以降)。PowerShell の `Invoke-WebRequest` は body 文字列のエンコーディングと HTTP エラーの扱いが curl と異なり、送信されるバイト列が macOS 側と一致しないため使わない。
+
+```applows
+let token = env("API_TOKEN", "")
+let body = read_stdin()
+let rc = http_post(
+  "https://example.com/api/v1/events",
+  ["Content-Type: application/json", "Authorization: Bearer {token}"],
+  body
+)
+if rc != 0 {
+  print "post failed rc={rc}"
 }
 ```
 
@@ -824,6 +880,8 @@ flowchart TD
 ### 外部コマンドの移植性
 
 `run` が呼ぶコマンドの存在・挙動は OS 依存です。両 OS にインストールされているネイティブ実行ファイルだけを使い、OS 固有コマンド (`ls` / `dir` / `open` / `start` 等) は避けてください。Windows で PowerShell の関数・エイリアスに解決される名前 (`mkdir` 等) は終了コードが取れないことがあります。
+
+`http_post` は組み込みですが、内部では両 OS とも `curl` を使います。macOS は標準搭載、Windows は `curl.exe` (Windows 10 1803 以降に同梱) が前提です。**それ以前の Windows では `2` ではなく `1` (通信失敗) を返します**。なお PowerShell では `curl` が `Invoke-WebRequest` のエイリアスなので、生成コードは必ず `curl.exe` と拡張子付きで呼びます。
 
 ### Windows の引数転送の文字制限
 

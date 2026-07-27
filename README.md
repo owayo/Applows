@@ -55,6 +55,8 @@ The full design — compilation pipeline, escaping strategy, and post-build stru
 - **Injection-resistant by construction** — external commands take argv arrays (`run(["git", "--version"])`), each element is quoted for its target, and user identifiers never appear verbatim in the generated code
 - **File operations** — existence tests, read/write/append/copy/remove, with atomic writes (temp file + move)
 - **HTTP download** — `http_download(url, dest)` maps to `curl -fSL` on macOS and `Invoke-WebRequest` on Windows, with atomic placement
+- **HTTP POST** — `http_post(url, headers, body)` sends a body with headers through `curl` on *both* platforms, so the bytes on the wire match. Secrets never reach the command line (headers go through a mode-0600 temp file), CR/LF headers are rejected, and redirects are not followed
+- **Standard input** — `read_stdin()` reads piped input as UTF-8 on both platforms and returns empty instead of blocking when attached to a terminal, so one script can serve as a hook or a filter
 - **Deterministic output** — UTF-8 without BOM, LF-only line endings, structurally verified after every build (here-string boundaries, heredoc delimiters, forbidden lines)
 - **Unicode-safe on Windows** — the script re-reads itself as UTF-8, so Japanese text and emoji survive Windows PowerShell 5.1
 - **Inspectable** — dump the sh payload, the PowerShell payload, or the compiler IR with `applows emit`
@@ -234,9 +236,11 @@ Rules worth knowing:
 | Arguments & environment | `args()`, `arg(i)`, `argc()`, `env(name, default)` | |
 | Processes | `run(argv)` | argv as a `List`; returns the exit code (`Int`) |
 | Filesystem | `exists`, `is_file`, `is_dir`, `read_text`, `write_text`, `append_text`, `copy`, `remove` | `write_text` is atomic (temp file + move) |
-| Network | `http_download(url, dest)` | `curl -fSL` / `Invoke-WebRequest` |
+| Standard input | `read_stdin()` | UTF-8; empty (not blocking) when stdin is a terminal |
+| Network | `http_download(url, dest)`, `http_post(url, headers, body)` | download: `curl -fSL` / `Invoke-WebRequest`. POST: `curl` on both platforms; `0` ok / `1` failed / `2` bad input |
 | Text | `upper`, `lower`, `trim` | |
 | Script location | `script_path()`, `script_dir()`, `cwd()` | |
+| Machine | `hostname()` | `uname -n` on macOS, NetBIOS name on Windows |
 
 The full grammar, type rules, and per-target mappings are specified in [docs/design.md](docs/design.md). A complete user-facing language reference (Japanese) is available in [docs/language.md](docs/language.md).
 

@@ -1,0 +1,16 @@
+# http_post / read_stdin / hostname の実 OS E2E 用フィクスチャ。
+# tests/support/http_post_e2e.py がローカルのエコーサーバを立てて実行する。
+
+let url = env("APPLOWS_TEST_URL", "")
+let token = env("APPLOWS_TEST_TOKEN", "none")
+let host = hostname()
+let body = read_stdin()
+
+let rc = http_post(url, ["Content-Type: application/json", "Authorization: Bearer {token}", "X-Host: {host}"], body)
+print "rc={rc}"
+
+# CR/LF を含むヘッダはヘッダインジェクションになるため送信せず 2 を返す
+let bad = http_post(url, ["X-Bad: value\nInjected: yes"], body)
+print "bad={bad}"
+
+exit 0

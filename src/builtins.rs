@@ -39,17 +39,20 @@ pub enum Builtin {
     IsFile,
     IsDir,
     ReadText,
+    ReadStdin,
     WriteText,
     AppendText,
     Copy,
     Remove,
     HttpDownload,
+    HttpPost,
     Upper,
     Lower,
     Trim,
     ScriptPath,
     ScriptDir,
     Cwd,
+    Hostname,
 }
 
 impl Builtin {
@@ -64,17 +67,20 @@ impl Builtin {
             "is_file" => Builtin::IsFile,
             "is_dir" => Builtin::IsDir,
             "read_text" => Builtin::ReadText,
+            "read_stdin" => Builtin::ReadStdin,
             "write_text" => Builtin::WriteText,
             "append_text" => Builtin::AppendText,
             "copy" => Builtin::Copy,
             "remove" => Builtin::Remove,
             "http_download" => Builtin::HttpDownload,
+            "http_post" => Builtin::HttpPost,
             "upper" => Builtin::Upper,
             "lower" => Builtin::Lower,
             "trim" => Builtin::Trim,
             "script_path" => Builtin::ScriptPath,
             "script_dir" => Builtin::ScriptDir,
             "cwd" => Builtin::Cwd,
+            "hostname" => Builtin::Hostname,
             _ => return None,
         })
     }
@@ -90,17 +96,20 @@ impl Builtin {
             Builtin::IsFile => "is_file",
             Builtin::IsDir => "is_dir",
             Builtin::ReadText => "read_text",
+            Builtin::ReadStdin => "read_stdin",
             Builtin::WriteText => "write_text",
             Builtin::AppendText => "append_text",
             Builtin::Copy => "copy",
             Builtin::Remove => "remove",
             Builtin::HttpDownload => "http_download",
+            Builtin::HttpPost => "http_post",
             Builtin::Upper => "upper",
             Builtin::Lower => "lower",
             Builtin::Trim => "trim",
             Builtin::ScriptPath => "script_path",
             Builtin::ScriptDir => "script_dir",
             Builtin::Cwd => "cwd",
+            Builtin::Hostname => "hostname",
         }
     }
 
@@ -114,12 +123,14 @@ impl Builtin {
             Builtin::Run => &[Type::List],
             Builtin::Exists | Builtin::IsFile | Builtin::IsDir => &[Type::Text],
             Builtin::ReadText => &[Type::Text],
+            Builtin::ReadStdin => &[],
             Builtin::WriteText | Builtin::AppendText => &[Type::Text, Type::Text],
             Builtin::Copy => &[Type::Text, Type::Text],
             Builtin::Remove => &[Type::Text],
             Builtin::HttpDownload => &[Type::Text, Type::Text],
+            Builtin::HttpPost => &[Type::Text, Type::List, Type::Text],
             Builtin::Upper | Builtin::Lower | Builtin::Trim => &[Type::Text],
-            Builtin::ScriptPath | Builtin::ScriptDir | Builtin::Cwd => &[],
+            Builtin::ScriptPath | Builtin::ScriptDir | Builtin::Cwd | Builtin::Hostname => &[],
         }
     }
 
@@ -132,13 +143,15 @@ impl Builtin {
             Builtin::Args => Type::List,
             Builtin::Run => Type::Int,
             Builtin::Exists | Builtin::IsFile | Builtin::IsDir => Type::Bool,
-            Builtin::ReadText => Type::Text,
+            Builtin::ReadText | Builtin::ReadStdin => Type::Text,
             Builtin::WriteText | Builtin::AppendText | Builtin::Copy | Builtin::Remove => {
                 Type::Unit
             }
-            Builtin::HttpDownload => Type::Int,
+            Builtin::HttpDownload | Builtin::HttpPost => Type::Int,
             Builtin::Upper | Builtin::Lower | Builtin::Trim => Type::Text,
-            Builtin::ScriptPath | Builtin::ScriptDir | Builtin::Cwd => Type::Text,
+            Builtin::ScriptPath | Builtin::ScriptDir | Builtin::Cwd | Builtin::Hostname => {
+                Type::Text
+            }
         }
     }
 
@@ -152,8 +165,9 @@ impl Builtin {
         matches!(self, Builtin::Arg)
     }
 
-    /// Windows で対応コマンドが無い等、移植性に注意が要る外部依存を持つか。
-    /// (今は http_download が curl/Invoke-WebRequest に依存する点を仕様で明示するのみ)
+    /// 副作用を持つか。単独の文として書けるか (戻り値を捨てられるか) と、
+    /// 条件式 (`and` / `or` / `not` の内側) へ書けないかの判定に使う。
+    /// `read_stdin` は標準入力を消費し 2 回目が空になるため副作用扱いにする。
     pub fn is_side_effecting(self) -> bool {
         matches!(
             self,
@@ -162,7 +176,9 @@ impl Builtin {
                 | Builtin::Copy
                 | Builtin::Remove
                 | Builtin::Run
+                | Builtin::ReadStdin
                 | Builtin::HttpDownload
+                | Builtin::HttpPost
         )
     }
 }

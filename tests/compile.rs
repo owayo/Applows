@@ -421,3 +421,55 @@ fn args_only_at_top_level() {
         "トップレベルでのみ",
     );
 }
+
+// ---- read_stdin / hostname / http_post ----
+
+#[test]
+fn read_stdin_is_side_effecting() {
+    // 標準入力は 1 度しか読めないので、条件へ直接書かせない (let で受けさせる)
+    err_contains(
+        "let x = \"a\"\nif read_stdin() == \"\" and x == \"a\" { print \"e\" }\n",
+        "副作用のある呼び出し",
+    );
+}
+
+#[test]
+fn hostname_result_must_be_used() {
+    err_contains("hostname()\n", "戻り値が使われていません");
+}
+
+#[test]
+fn http_post_arity_is_checked() {
+    err_contains(
+        "let rc = http_post(\"https://example.com\", [])\nprint \"{rc}\"\n",
+        "引数",
+    );
+}
+
+#[test]
+fn http_post_headers_must_be_a_list() {
+    err_contains(
+        "let rc = http_post(\"https://example.com\", \"Content-Type: application/json\", \"b\")\nprint \"{rc}\"\n",
+        "リスト",
+    );
+}
+
+#[test]
+fn http_post_body_must_be_text() {
+    err_contains(
+        "let rc = http_post(\"https://example.com\", [], 42)\nprint \"{rc}\"\n",
+        "型が一致しません",
+    );
+}
+
+#[test]
+fn http_post_can_be_a_statement() {
+    // 副作用があるので戻り値を捨てる文として書ける
+    ok("http_post(\"https://example.com\", [], \"body\")\n");
+}
+
+#[test]
+fn http_post_accepts_args_as_headers() {
+    // args() をヘッダに使っても構文的には通る (List なので)
+    ok("http_post(\"https://example.com\", args(), \"body\")\n");
+}

@@ -196,3 +196,100 @@ fn nested_functions_call_order() {
     assert!(r.sh_payload.contains("__ap_f0() {"));
     assert!(r.sh_payload.contains("__ap_f1() {"));
 }
+
+#[test]
+fn read_stdin_codegen() {
+    let r = ok("let s = read_stdin()\nprint \"{s}\"\n");
+    // sh: tty から起動されたときに入力待ちで固まらないよう [ -t 0 ] で分岐する
+    assert!(r.sh_payload.contains("[ -t 0 ]"), "sh:\n{}", r.sh_payload);
+    assert!(r.sh_payload.contains("$(cat)"), "sh:\n{}", r.sh_payload);
+    // PowerShell: 既定の [Console]::In は OEM コードページになり得るので UTF-8 を明示する
+    assert!(
+        r.ps_payload.contains("[Console]::IsInputRedirected"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+    assert!(
+        r.ps_payload.contains("OpenStandardInput"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+    assert!(
+        r.ps_payload.contains("UTF8Encoding $false"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+}
+
+#[test]
+fn hostname_codegen() {
+    let r = ok("let h = hostname()\nprint \"{h}\"\n");
+    assert!(r.sh_payload.contains("uname -n"), "sh:\n{}", r.sh_payload);
+    assert!(
+        r.ps_payload.contains("[System.Net.Dns]::GetHostName()"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+}
+
+#[test]
+fn http_post_uses_curl_on_both_targets() {
+    let src = "let rc = http_post(\"https://example.com/api\", [\"Content-Type: application/json\"], \"{}\")\nprint \"{rc}\"\n"
+        .replace("{}", "\\{\\}");
+    let r = ok(&src);
+    assert!(
+        r.sh_payload.contains("curl --fail"),
+        "sh:\n{}",
+        r.sh_payload
+    );
+    // PowerShell 5.1 の Invoke-WebRequest は body のエンコーディングと HTTP エラーの
+    // 扱いが curl と違い、送信バイト列が sh 側と一致しないため curl.exe を使う。
+    assert!(
+        r.ps_payload.contains("curl.exe --fail"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+    assert!(
+        !r.ps_payload.contains("Invoke-WebRequest"),
+        "http_post は Invoke-WebRequest を使わない:\n{}",
+        r.ps_payload
+    );
+}
+
+#[test]
+fn http_post_never_puts_headers_on_the_command_line() {
+    let src = "let t = env(\"TOKEN\", \"\")\nlet rc = http_post(\"https://example.com/api\", [\"Authorization: Bearer {t}\"], \"body\")\nprint \"{rc}\"\n";
+    let r = ok(src);
+    // 秘密情報が `ps` から読めてしまうため、ヘッダは必ずファイル経由 (--header @file)
+    for payload in [&r.sh_payload, &r.ps_payload] {
+        assert!(
+            payload.contains("--header @") || payload.contains("--header \"@"),
+            "ヘッダはファイル経由で渡すこと:\n{payload}"
+        );
+        assert!(
+            !payload.contains("--header \"Authorization"),
+            "ヘッダ値をコマンドラインに載せてはいけない:\n{payload}"
+        );
+    }
+}
+
+#[test]
+fn http_post_does_not_follow_redirects() {
+    let src = "let rc = http_post(\"https://example.com/api\", [], \"body\")\nprint \"{rc}\"\n";
+    let r = ok(src);
+    // リダイレクト先へ Authorization を漏らさないため --location は付けない
+    for payload in [&r.sh_payload, &r.ps_payload] {
+        assert!(
+            !payload.contains("--location"),
+            "リダイレクトは追わない:\n{payload}"
+        );
+    }
+}
+
+#[test]
+fn http_post_with_empty_headers_emits_no_loop() {
+    let src = "let rc = http_post(\"https://example.com/api\", [], \"body\")\nprint \"{rc}\"\n";
+    let r = ok(src);
+    // 空リテラルで `for x in ; do` を出すと sh 構文エラーになる
+    assert!(!r.sh_payload.contains("in ; do"), "sh:\n{}", r.sh_payload);
+}

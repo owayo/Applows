@@ -11,8 +11,15 @@ env:
 
 jobs:
   test:
-    name: Test & Lint
-    runs-on: ubuntu-latest
+    # tests/execution.rs は生成物を実際に /bin/sh と zsh で走らせるため macOS 専用
+    # (Debian 系の /bin/sh = dash はポリグロットヘッダの `function` を解釈できない)。
+    # ubuntu だけで回すと実行テストが 1 件も走らないので、macOS も matrix に入れる。
+    name: Test & Lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v5
 
@@ -99,6 +106,10 @@ jobs:
           ./target/release/applows emit tests/fixtures/smoke.aplo --target sh > payload.sh
           /bin/sh -n payload.sh
           /bin/zsh -n payload.sh
+      - name: Compile http_post fixture
+        run: ./target/release/applows build tests/fixtures/httppost.aplo -o httppost.bat
+      - name: http_post / read_stdin / hostname against a local echo server
+        run: python3 tests/support/http_post_e2e.py httppost.bat
 
   e2e-windows:
     name: E2E (Windows PowerShell 5.1)
@@ -142,3 +153,9 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseInput((Get-Content payload.ps1 -Raw), [ref]$tokens, [ref]$errors) | Out-Null
           if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Host $_ }; throw 'PowerShell parse errors' }
           Write-Host 'ps payload parses ok'
+      - name: Compile http_post fixture
+        shell: cmd
+        run: target\release\applows.exe build tests\fixtures\httppost.aplo -o httppost.bat
+      - name: http_post / read_stdin / hostname against a local echo server
+        shell: cmd
+        run: python tests\support\http_post_e2e.py httppost.bat

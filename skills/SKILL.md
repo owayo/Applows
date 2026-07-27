@@ -152,11 +152,14 @@ exit 0                        # 終了コード (0-255)。`exit` 単独 = exit 0
 | `arg(i)` / `argc()` / `args()` | Text / Int / List | スクリプト引数。`i` は 1 始まりの整数リテラル。**トップレベルのみ** (関数内不可)。反復は `for a in args()` |
 | `exists(p)` / `is_file(p)` / `is_dir(p)` | Bool | 存在判定 (条件でのみ使用可) |
 | `read_text(p)` | Text | ファイル読み込み (UTF-8) |
+| `read_stdin()` | Text | 標準入力を最後まで読む (UTF-8)。端末起動時は待たずに空。**副作用扱い**なので条件に直接書けず `let` で受ける |
 | `write_text(p, s)` / `append_text(p, s)` | — | ファイル書き込み (原子的 / UTF-8 BOM 無し) |
 | `copy(from, to)` / `remove(p)` | — | コピー / 削除 (remove は欠損を無視) |
 | `http_download(url, dest)` | Int (0=成功) | ダウンロード (原子的置換) |
+| `http_post(url, headers, body)` | Int (0=成功 / 1=失敗 / 2=入力不正) | POST。`headers` は `["Name: value", ...]` のリストリテラル (変数不可、値の補間は可)。秘密情報はファイル経由で渡すのでコマンドライン引数に出ない。CR/LF を含むヘッダは送らず 2 を返す |
 | `upper(s)` / `lower(s)` / `trim(s)` | Text | 文字列変換 |
 | `script_path()` / `script_dir()` / `cwd()` | Text | 自スクリプトのパス / ディレクトリ / カレント |
+| `hostname()` | Text | ホスト名 (macOS は `uname -n`、Windows は NetBIOS 名。表記は揃わない) |
 
 ## その他のコンパイル時ルール (`check` で弾かれる)
 
