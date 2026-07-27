@@ -627,6 +627,24 @@ impl Lowerer {
             return Ok(Value::Run { argv });
         }
 
+        // http_post(url, headers, body) はヘッダがリストのため run と同様に特別扱いする
+        // (Value::Builtin の args は スカラ値だけを載せられるため)。
+        if builtin == Builtin::HttpPost {
+            if args.len() != 3 {
+                return Err(self.arity_err(builtin, args.len(), span));
+            }
+            let (url, url_ty) = self.lower_value(&args[0], scope, fn_index)?;
+            self.expect(url_ty, Type::Text, args[0].span())?;
+            let headers = self.lower_list(&args[1], scope, fn_index)?;
+            let (body, body_ty) = self.lower_value(&args[2], scope, fn_index)?;
+            self.expect(body_ty, Type::Text, args[2].span())?;
+            return Ok(Value::HttpPost {
+                url: Box::new(url),
+                headers,
+                body: Box::new(body),
+            });
+        }
+
         let params = builtin.params();
         if args.len() != params.len() {
             return Err(self.arity_err(builtin, args.len(), span));
@@ -761,7 +779,7 @@ impl Lowerer {
                 // 判定前に必ず実行されてしまう。let で受けてから比較させる。
                 if compound && (value_has_side_effect(&l) || value_has_side_effect(&r)) {
                     return Err(Diagnostic::error(
-                        "and/or/not の内側に副作用のある呼び出し (run / http_download / 関数呼び出し) は書けません",
+                        "and/or/not の内側に副作用のある呼び出し (run / read_stdin / http_download / http_post / 関数呼び出し) は書けません",
                         *span,
                     )
                     .with_note("`let c = run([...])` で受けてから `c == 0` を条件に使う (条件は短絡評価されないため)"));
@@ -992,7 +1010,7 @@ fn loop_invariant_error(name: &str, before: Type, after: Type, span: Span) -> Di
 /// 値が副作用を持つか (run / ユーザ関数 / http_download 等)。複合条件での禁止判定に使う。
 fn value_has_side_effect(v: &Value) -> bool {
     match v {
-        Value::Run { .. } | Value::Call { .. } => true,
+        Value::Run { .. } | Value::Call { .. } | Value::HttpPost { .. } => true,
         Value::Builtin { builtin, args } => {
             builtin.is_side_effecting() || args.iter().any(value_has_side_effect)
         }

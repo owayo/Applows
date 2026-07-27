@@ -99,6 +99,10 @@ jobs:
           ./target/release/applows emit tests/fixtures/smoke.aplo --target sh > payload.sh
           /bin/sh -n payload.sh
           /bin/zsh -n payload.sh
+      - name: Compile http_post fixture
+        run: ./target/release/applows build tests/fixtures/httppost.aplo -o httppost.bat
+      - name: http_post / read_stdin / hostname against a local echo server
+        run: python3 tests/support/http_post_e2e.py httppost.bat
 
   e2e-windows:
     name: E2E (Windows PowerShell 5.1)
@@ -142,3 +146,9 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseInput((Get-Content payload.ps1 -Raw), [ref]$tokens, [ref]$errors) | Out-Null
           if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Host $_ }; throw 'PowerShell parse errors' }
           Write-Host 'ps payload parses ok'
+      - name: Compile http_post fixture
+        shell: cmd
+        run: target\release\applows.exe build tests\fixtures\httppost.aplo -o httppost.bat
+      - name: http_post / read_stdin / hostname against a local echo server
+        shell: cmd
+        run: python tests\support\http_post_e2e.py httppost.bat

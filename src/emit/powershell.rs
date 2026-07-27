@@ -301,6 +301,9 @@ impl Ps {
                 ));
                 t
             }
+            Value::HttpPost { url, headers, body } => {
+                self.render_http_post(url, headers, body, pre)
+            }
             Value::Call { name, args } => {
                 let words: Vec<String> = args.iter().map(|a| self.materialize(a, pre)).collect();
                 let t = self.fresh_temp();
@@ -373,6 +376,19 @@ impl Ps {
                 format!("([string]{s}).Trim()")
             }
             Builtin::HttpDownload => self.render_http_download(args, pre),
+            Builtin::ReadStdin => {
+                let t = self.fresh_temp();
+                // 既定の [Console]::In は OEM コードページになり得るので、UTF-8 を明示した
+                // StreamReader で読む。tty 起動時に固まらないよう IsInputRedirected を見る。
+                pre.push(format!("{t} = ''"));
+                pre.push("if ([Console]::IsInputRedirected) {".to_string());
+                pre.push(format!(
+                    "  {t} = (New-Object System.IO.StreamReader([Console]::OpenStandardInput(), (New-Object System.Text.UTF8Encoding $false), $true)).ReadToEnd()"
+                ));
+                pre.push("}".to_string());
+                t
+            }
+            Builtin::Hostname => "[System.Net.Dns]::GetHostName()".to_string(),
             Builtin::ScriptPath => "$env:APPLOWS_SELF".to_string(),
             Builtin::ScriptDir => {
                 "[System.IO.Path]::GetDirectoryName($env:APPLOWS_SELF)".to_string()
@@ -391,6 +407,66 @@ impl Ps {
         pre.push(format!(
             "try {{ Invoke-WebRequest -UseBasicParsing -Uri {url} -OutFile \"$({d}).part\"; Move-Item -Force -LiteralPath \"$({d}).part\" -Destination {d}; {t} = 0 }} catch {{ Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath \"$({d}).part\"; {t} = 1 }}"
         ));
+        t
+    }
+
+    /// HTTP POST。sh 側と意味を揃えるため `Invoke-WebRequest` ではなく `curl.exe`
+    /// (Windows 10 1803 以降が同梱) を使う。`Invoke-WebRequest` は body 文字列の
+    /// エンコーディングと HTTP エラーの扱いが curl と異なり、送信バイト列が一致しない。
+    ///
+    /// - ヘッダは 秘密情報がプロセス一覧に出ないよう `--header @file` で渡す。
+    /// - CR/LF/NUL を含むヘッダは送信せず `2` を返す。
+    /// - `--location` は付けない (リダイレクト先へ Authorization を漏らさない)。
+    fn render_http_post(
+        &mut self,
+        url: &Value,
+        headers: &List,
+        body: &Value,
+        pre: &mut Vec<String>,
+    ) -> String {
+        let url = self.materialize(url, pre);
+        let body = self.materialize(body, pre);
+        let items = self.render_list(headers);
+        let t = self.fresh_temp();
+        let b = self.fresh_temp();
+        let h = self.fresh_temp();
+        let ok = self.fresh_temp();
+        let hl = self.fresh_temp();
+        let x = self.fresh_temp();
+
+        pre.push(format!("{t} = 2"));
+        pre.push(format!("{b} = ''"));
+        pre.push("try {".to_string());
+        pre.push(format!("  {b} = [System.IO.Path]::GetTempFileName()"));
+        pre.push(format!("  {h} = \"$({b}).h\""));
+        pre.push(format!(
+            "  [System.IO.File]::WriteAllText({b}, {body}, (New-Object System.Text.UTF8Encoding $false))"
+        ));
+        pre.push(format!("  {ok} = $true"));
+        pre.push(format!("  {hl} = New-Object System.Collections.ArrayList"));
+        pre.push(format!("  foreach ({x} in {items}) {{"));
+        pre.push(format!(
+            "    if ([string]{x} -match \"[`r`n`0]\") {{ {ok} = $false }} else {{ $null = {hl}.Add([string]{x}) }}"
+        ));
+        pre.push("  }".to_string());
+        pre.push(format!("  if ({ok}) {{"));
+        pre.push(format!(
+            "    [System.IO.File]::WriteAllLines({h}, [string[]]{hl}.ToArray(), (New-Object System.Text.UTF8Encoding $false))"
+        ));
+        pre.push(format!(
+            "    & curl.exe --fail --silent --show-error --max-time 30 --request POST --header \"@$({h})\" --data-binary \"@$({b})\" --output NUL --url {url}"
+        ));
+        pre.push(format!(
+            "    if ($LASTEXITCODE -eq 0) {{ {t} = 0 }} else {{ {t} = 1 }}"
+        ));
+        pre.push("  }".to_string());
+        pre.push(format!("}} catch {{ {t} = 1 }} finally {{"));
+        pre.push(format!("  if ({b} -ne '') {{"));
+        pre.push(format!(
+            "    Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath {b}, \"$({b}).h\""
+        ));
+        pre.push("  }".to_string());
+        pre.push("}".to_string());
         t
     }
 

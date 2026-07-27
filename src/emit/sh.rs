@@ -287,6 +287,9 @@ impl Sh {
                 pre.push(format!("{t}=$?"));
                 format!("\"${t}\"")
             }
+            Value::HttpPost { url, headers, body } => {
+                self.render_http_post(url, headers, body, pre)
+            }
             Value::Call { name, args } => {
                 let words: Vec<String> = args.iter().map(|a| self.materialize(a, pre)).collect();
                 let t = self.fresh_temp();
@@ -368,6 +371,18 @@ impl Sh {
                 )
             }
             Builtin::HttpDownload => self.render_http_download(args, pre),
+            Builtin::ReadStdin => {
+                let t = self.fresh_temp();
+                // tty から起動された場合に入力待ちで固まらないよう、リダイレクトされている
+                // ときだけ読む (PowerShell 側の [Console]::IsInputRedirected と同じ意味)。
+                pre.push(format!("if [ -t 0 ]; then {t}=''; else {t}=\"$(cat)\"; fi"));
+                format!("\"${t}\"")
+            }
+            Builtin::Hostname => {
+                let t = self.fresh_temp();
+                pre.push(format!("{t}=\"$(uname -n 2>/dev/null)\""));
+                format!("\"${t}\"")
+            }
             Builtin::ScriptPath => "\"$0\"".to_string(),
             Builtin::ScriptDir => {
                 "\"$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\"".to_string()
@@ -386,6 +401,60 @@ impl Sh {
         pre.push(format!(
             "if curl -fsSL {url} -o \"${d}.part.$$\"; then mv -f \"${d}.part.$$\" \"${d}\"; {t}=0; else rm -f \"${d}.part.$$\"; {t}=1; fi"
         ));
+        format!("\"${t}\"")
+    }
+
+    /// HTTP POST。body とヘッダは 0600 の一時ファイル経由で curl へ渡す。
+    ///
+    /// - 秘密情報 (Authorization 等) をコマンドライン引数に載せない (`ps` から読めてしまうため)
+    ///   ので、ヘッダは `--header @file` で渡す。
+    /// - CR/LF を含むヘッダはヘッダインジェクションになるため送信せず `2` を返す。
+    /// - `--location` は付けない (リダイレクト先へ Authorization を漏らさない)。
+    fn render_http_post(
+        &mut self,
+        url: &Value,
+        headers: &List,
+        body: &Value,
+        pre: &mut Vec<String>,
+    ) -> String {
+        let url = self.materialize(url, pre);
+        let body = self.materialize(body, pre);
+        let t = self.fresh_temp();
+        let b = self.fresh_temp();
+        let h = self.fresh_temp();
+        let ok = self.fresh_temp();
+        let hv = self.fresh_temp();
+
+        // 空のリテラルリストは `for x in ; do` になり構文エラーなので、ループごと省く。
+        let header_words = match headers {
+            List::Literal(items) if items.is_empty() => None,
+            other => Some(self.render_list(other)),
+        };
+
+        pre.push(format!("{t}=2"));
+        pre.push(format!(
+            "{b}=\"$(mktemp \"${{TMPDIR:-/tmp}}/applows.XXXXXX\" 2>/dev/null)\" || {b}=''"
+        ));
+        pre.push(format!("if [ -n \"${b}\" ]; then"));
+        pre.push(format!("  {h}=\"${b}.h\""));
+        pre.push(format!("  : > \"${h}\""));
+        pre.push(format!("  chmod 600 \"${b}\" \"${h}\" 2>/dev/null || :"));
+        pre.push(format!("  printf '%s' {body} > \"${b}\""));
+        pre.push(format!("  {ok}=1"));
+        if let Some(words) = header_words {
+            pre.push(format!("  for {hv} in {words}; do"));
+            pre.push(format!(
+                "    if [ \"$(printf '%s' \"${hv}\" | tr -d '\\r\\n')\" != \"${hv}\" ]; then {ok}=0; else printf '%s\\n' \"${hv}\" >> \"${h}\"; fi"
+            ));
+            pre.push("  done".to_string());
+        }
+        pre.push(format!("  if [ \"${ok}\" = 1 ]; then"));
+        pre.push(format!(
+            "    if curl --fail --silent --show-error --max-time 30 --request POST --header @\"${h}\" --data-binary @\"${b}\" --output /dev/null --url {url}; then {t}=0; else {t}=1; fi"
+        ));
+        pre.push("  fi".to_string());
+        pre.push(format!("  rm -f \"${b}\" \"${h}\""));
+        pre.push("fi".to_string());
         format!("\"${t}\"")
     }
 
