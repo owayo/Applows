@@ -54,6 +54,11 @@ def main() -> int:
         検証に成功したら 0、失敗があれば 1。
 
     """
+    # Windows の Python は既定で cp1252 の stdout になり、body に含む
+    # 日本語・絵文字を print した時点で UnicodeEncodeError になる。
+    # 検証結果の表示で落ちないよう UTF-8 に揃える。
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     script = sys.argv[1]
     server = http.server.HTTPServer(("127.0.0.1", PORT), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
