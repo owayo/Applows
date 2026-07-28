@@ -329,6 +329,39 @@ fn run_capture_discards_stderr_and_normalizes_on_both_targets() {
 }
 
 #[test]
+fn json_builtins_do_not_round_trip_through_a_parser() {
+    let src = "let x = json_add(\"\\{\\}\", \"k\", \"v\")\nprint \"{x}\"\n";
+    let r = ok(src);
+
+    // PowerShell 5.1 の ConvertTo-Json は -Depth 既定 2 で入れ子を切り落とし、
+    // 非 ASCII のエスケープも揃わない。JSON 本体は解析せず差し込むだけにする。
+    assert!(
+        !r.ps_payload.contains("ConvertTo-Json"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+    assert!(
+        !r.ps_payload.contains("ConvertFrom-Json"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+    // sh 側も jq のような外部依存を持ち込まない
+    assert!(!r.sh_payload.contains("jq"), "sh:\n{}", r.sh_payload);
+
+    // 制御文字の除去は両ターゲットで行う (JSON 文字列に生の制御文字を混ぜない)
+    assert!(
+        r.sh_payload.contains("tr -d '\\000-\\037'"),
+        "sh:\n{}",
+        r.sh_payload
+    );
+    assert!(
+        r.ps_payload.contains("[\\x00-\\x1F]"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+}
+
+#[test]
 fn run_capture_with_args_guards_empty_argv() {
     let src = "let x = run_capture(args(), \"d\")\nprint \"{x}\"\n";
     let r = ok(src);

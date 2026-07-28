@@ -508,6 +508,27 @@ fn run_capture_default_must_be_text() {
 }
 
 #[test]
+fn json_add_requires_three_text_args() {
+    // .aplo のリテラル波括弧は \{ \} で書く
+    err_contains(
+        "let x = json_add(\"\\{\\}\", \"k\")\nprint \"{x}\"\n",
+        "引数 3 個",
+    );
+    err_contains(
+        "let x = json_add(\"\\{\\}\", \"k\", 1)\nprint \"{x}\"\n",
+        "型が一致しません",
+    );
+}
+
+#[test]
+fn json_escape_is_a_pure_value() {
+    // 副作用が無いので条件式の中でも使える
+    ok("if json_escape(\"a\") == \"a\" { print \"ok\" }\n");
+    // 戻り値を捨てる文にはできない
+    err_contains("json_escape(\"a\")\n", "戻り値が使われていません");
+}
+
+#[test]
 fn run_capture_accepts_args_as_argv() {
     // args() を argv に使える (空なら default に落ちる)
     ok("let x = run_capture(args(), \"\")\nprint \"{x}\"\n");

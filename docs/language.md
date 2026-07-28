@@ -615,6 +615,8 @@ if os == "Windows_NT" {
 | `upper(s)` | Text | Text | 値 | 大文字化 |
 | `lower(s)` | Text | Text | 値 | 小文字化 |
 | `trim(s)` | Text | Text | 値 | 先頭・末尾の空白 (スペース/タブ/改行) を除去 |
+| `json_escape(s)` | Text | Text | 値 | JSON 文字列リテラル用にエスケープ ([JSON](#json)) |
+| `json_add(json, key, value)` | Text, Text, Text | Text | 値 | top-level オブジェクトへ `"key":"value"` を追記 ([JSON](#json)) |
 | `script_path()` | — | Text | 値 | 実行中のスクリプト自身のパス |
 | `script_dir()` | — | Text | 値 | スクリプトのあるディレクトリ (絶対パス) |
 | `cwd()` | — | Text | 値 | 呼び出し元の現在の作業ディレクトリ |
@@ -817,6 +819,43 @@ let loud = upper("make it loud")   # "MAKE IT LOUD"
 ```applows
 let clean = trim("  padded  ")   # "padded"
 ```
+
+### JSON
+
+Applows に JSON パーサは無い。**値を取り出す機能は提供しない** — sh 側は sed による近似に、
+PowerShell 側は本物のパーサになり、両 OS で意味が揃わないため。提供するのは
+「安全に組み立てる」側の 2 つだけ。
+
+#### `json_escape(s) -> Text`
+
+JSON 文字列リテラルの中身として安全な形へ変換する。`\` と `"` をエスケープし、
+制御文字 (U+0000〜U+001F) は**除去**する (JSON 文字列にそのまま置けないため)。
+
+```applows
+let safe = json_escape("he said \"hi\"")     # he said \"hi\"
+let body = "\{\"message\":\"{safe}\"\}"
+```
+
+#### `json_add(json, key, value) -> Text`
+
+top-level オブジェクトの**閉じ波括弧の直前**へ `"key":"value"` を差し込む。
+key と value は自動で `json_escape` される。
+
+```applows
+let input = read_stdin()
+let out = json_add(input, "project", "/path/to/repo")
+```
+
+- **JSON を解析しない**。既存の中身 (入れ子・配列・数値・空白) は一切変形しないので、
+  受け取った JSON をほぼそのまま転送したいときに向く
+- 値は必ず**文字列**として入る。数値や真偽値、入れ子オブジェクトは入れられない
+- 既存の同名キーは**上書きしない** (JSON としては重複キーになる)。重ねないよう呼び出し側で管理する
+- 末尾が `}` でない入力 (配列・スカラ・空文字) は**そのまま返す**
+- 前処理として制御文字の除去と末尾空白の削除だけ行う。整形済み JSON を渡すと改行が落ちて 1 行になる
+
+PowerShell 5.1 の `ConvertFrom-Json` / `ConvertTo-Json` は使っていない。
+`ConvertTo-Json` の `-Depth` 既定値が 2 で入れ子を切り落とすうえ、非 ASCII のエスケープも
+sh 側と揃わないため、round-trip させると受け取った JSON が壊れる。
 
 ### パス情報
 

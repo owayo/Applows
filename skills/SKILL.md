@@ -159,6 +159,8 @@ exit 0                        # 終了コード (0-255)。`exit` 単独 = exit 0
 | `http_download(url, dest)` | Int (0=成功) | ダウンロード (原子的置換) |
 | `http_post(url, headers, body)` | Int (0=成功 / 1=失敗 / 2=入力不正) | POST。`headers` は `["Name: value", ...]` のリストリテラル (変数不可、値の補間は可)。秘密情報はファイル経由で渡すのでコマンドライン引数に出ない。CR/LF を含むヘッダは送らず 2 を返す |
 | `upper(s)` / `lower(s)` / `trim(s)` | Text | 文字列変換 |
+| `json_escape(s)` | Text | JSON 文字列リテラル用にエスケープ (`\` と `"`、制御文字は除去) |
+| `json_add(json, key, value)` | Text | top-level オブジェクトの閉じ波括弧の直前へ `"key":"value"` を追記。**JSON を解析しない**ので中身は変形しない。値は文字列のみ。同名キーは上書きせず重複する。末尾が `}` でなければそのまま返す。key/value は自動エスケープ。JSON の**値の取り出しは提供しない** (両 OS で意味が揃わないため) |
 | `script_path()` / `script_dir()` / `cwd()` | Text | 自スクリプトのパス / ディレクトリ / カレント |
 | `hostname()` | Text | ホスト名 (macOS は `uname -n`、Windows は NetBIOS 名。表記は揃わない) |
 

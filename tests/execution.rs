@@ -319,6 +319,71 @@ fn run_capture_with_args_falls_back_when_empty() {
 }
 
 #[test]
+fn json_escape_covers_quotes_backslash_and_utf8() {
+    let src = r#"let a = json_escape("he said \"hi\"")
+print "a=[{a}]"
+let b = json_escape("C:\\Users\\test")
+print "b=[{b}]"
+let c = json_escape("日本語 と 空白")
+print "c=[{c}]"
+"#;
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(
+        out,
+        "a=[he said \\\"hi\\\"]\nb=[C:\\\\Users\\\\test]\nc=[日本語 と 空白]\n"
+    );
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn json_add_inserts_before_closing_brace() {
+    // JSON は解析せず末尾へ差し込むだけなので、入れ子も配列もそのまま残る
+    let src = r#"let body = "\{\"session_id\":\"abc\",\"nested\":\{\"a\":1,\"b\":[1,2]\}\}"
+let one = json_add(body, "project", "/tmp/proj")
+print "one=[{one}]"
+let two = json_add(one, "git_remote_url", "https://example.com/r.git")
+print "two=[{two}]"
+"#;
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(
+        out,
+        concat!(
+            "one=[{\"session_id\":\"abc\",\"nested\":{\"a\":1,\"b\":[1,2]},\"project\":\"/tmp/proj\"}]\n",
+            "two=[{\"session_id\":\"abc\",\"nested\":{\"a\":1,\"b\":[1,2]},\"project\":\"/tmp/proj\",\"git_remote_url\":\"https://example.com/r.git\"}]\n"
+        )
+    );
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn json_add_handles_empty_object_and_non_object() {
+    let src = r#"let a = json_add("\{\}", "k", "v")
+print "a=[{a}]"
+let b = json_add("\{ \}", "k", "v")
+print "b=[{b}]"
+let c = json_add("[1,2]", "k", "v")
+print "c=[{c}]"
+let d = json_add("\{\"a\":1\}", "k", "va\"l\\ue")
+print "d=[{d}]"
+"#;
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(
+        out,
+        concat!(
+            "a=[{\"k\":\"v\"}]\n",
+            "b=[{\"k\":\"v\"}]\n",
+            // top-level オブジェクトでなければ手を付けない
+            "c=[[1,2]]\n",
+            "d=[{\"a\":1,\"k\":\"va\\\"l\\\\ue\"}]\n"
+        )
+    );
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn run_capture_handles_utf8_and_spaces() {
     let src = concat!(
         "let s = run_capture([\"printf\", \"%s\", \"日本語 と 空白\"], \"\")\n",

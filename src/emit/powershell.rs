@@ -412,6 +412,47 @@ impl Ps {
                 let s = self.materialize(&args[0], pre);
                 format!("([string]{s}).Trim()")
             }
+            Builtin::JsonEscape => {
+                let s = self.materialize(&args[0], pre);
+                json_escape_expr(&s)
+            }
+            Builtin::JsonAdd => {
+                let json = self.materialize(&args[0], pre);
+                let key = self.materialize(&args[1], pre);
+                let value = self.materialize(&args[2], pre);
+                let ek = self.fresh_temp();
+                let ev = self.fresh_temp();
+                let base = self.fresh_temp();
+                let inner = self.fresh_temp();
+                let out = self.fresh_temp();
+
+                pre.push(format!("{ek} = {}", json_escape_expr(&key)));
+                pre.push(format!("{ev} = {}", json_escape_expr(&value)));
+                // ConvertFrom-Json / ConvertTo-Json は使わない。5.1 の ConvertTo-Json は
+                // -Depth 既定 2 で入れ子を切り落とし、非 ASCII のエスケープも揃わないため、
+                // JSON 本体を解析せず閉じ波括弧の直前へ差し込む (sh 側と同じ手順)。
+                pre.push(format!(
+                    "{base} = ((([string]{json}) -replace '[\\x00-\\x1F]', '')).TrimEnd()"
+                ));
+                pre.push(format!("if ({base}.EndsWith('}}')) {{"));
+                pre.push(format!(
+                    "  {inner} = {base}.Substring(0, {base}.Length - 1).TrimEnd()"
+                ));
+                pre.push(format!("  if ({inner} -ceq '{{') {{"));
+                pre.push(format!(
+                    "    {out} = ('{{\"' + {ek} + '\":\"' + {ev} + '\"}}')"
+                ));
+                pre.push("  } else {".to_string());
+                pre.push(format!(
+                    "    {out} = ({inner} + ',\"' + {ek} + '\":\"' + {ev} + '\"}}')"
+                ));
+                pre.push("  }".to_string());
+                pre.push("} else {".to_string());
+                // 末尾が } でない = top-level オブジェクトではないので手を付けない
+                pre.push(format!("  {out} = {base}"));
+                pre.push("}".to_string());
+                out
+            }
             Builtin::HttpDownload => self.render_http_download(args, pre),
             Builtin::ReadStdin => {
                 let t = self.fresh_temp();
@@ -601,6 +642,15 @@ fn render_str(parts: &[StrPart]) -> String {
         return terms.into_iter().next().unwrap();
     }
     format!("({})", terms.join(" + "))
+}
+
+/// JSON 文字列リテラルの中身として安全な形へ変換する式を返す。
+/// 制御文字 (U+0000〜U+001F) を除去し、`\` と `"` をエスケープする。
+/// sh 側の実装と結果を一致させること。
+fn json_escape_expr(src: &str) -> String {
+    format!(
+        "((([string]{src}) -replace '[\\x00-\\x1F]', '').Replace('\\', '\\\\').Replace('\"', '\\\"'))"
+    )
 }
 
 /// 算術式を PowerShell へ。除算だけは特別扱い: PowerShell の `/` は浮動小数除算のため、

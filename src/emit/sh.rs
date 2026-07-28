@@ -394,6 +394,46 @@ impl Sh {
                     "\"$(printf '%s' {s} | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')\""
                 )
             }
+            Builtin::JsonEscape => {
+                let s = self.materialize(&args[0], pre);
+                json_escape_expr(&s)
+            }
+            Builtin::JsonAdd => {
+                let json = self.materialize(&args[0], pre);
+                let key = self.materialize(&args[1], pre);
+                let value = self.materialize(&args[2], pre);
+                let ek = self.fresh_temp();
+                let ev = self.fresh_temp();
+                let base = self.fresh_temp();
+                let cut = self.fresh_temp();
+                let inner = self.fresh_temp();
+                let out = self.fresh_temp();
+
+                pre.push(format!("{ek}={}", json_escape_expr(&key)));
+                pre.push(format!("{ev}={}", json_escape_expr(&value)));
+                // JSON 本体は解析しない。制御文字の除去と末尾空白の削除だけして、
+                // 閉じ波括弧の直前へフィールドを差し込む (中身は一切変形しない)。
+                pre.push(format!(
+                    r#"{base}="$(printf '%s' {json} | tr -d '\000-\037' | sed -e 's/[[:space:]]*$//')""#
+                ));
+                pre.push(format!(r#"{cut}="${{{base}%\}}}}""#));
+                pre.push(format!(r#"if [ "${{{cut}}}" = "${{{base}}}" ]; then"#));
+                // 末尾が } でない = top-level オブジェクトではないので手を付けない
+                pre.push(format!(r#"  {out}="${{{base}}}""#));
+                pre.push("else".to_string());
+                pre.push(format!(
+                    r#"  {inner}="$(printf '%s' "${{{cut}}}" | sed -e 's/[[:space:]]*$//')""#
+                ));
+                pre.push(format!(r#"  if [ "${{{inner}}}" = '{{' ]; then"#));
+                pre.push(format!(r#"    {out}="{{\"${{{ek}}}\":\"${{{ev}}}\"}}""#));
+                pre.push("  else".to_string());
+                pre.push(format!(
+                    r#"    {out}="${{{inner}}},\"${{{ek}}}\":\"${{{ev}}}\"}}""#
+                ));
+                pre.push("  fi".to_string());
+                pre.push("fi".to_string());
+                format!("\"${{{out}}}\"")
+            }
             Builtin::HttpDownload => self.render_http_download(args, pre),
             Builtin::ReadStdin => {
                 let t = self.fresh_temp();
@@ -601,4 +641,11 @@ fn push_unique<'a>(out: &mut Vec<&'a str>, seen: &mut HashSet<&'a str>, v: &'a s
     if seen.insert(v) {
         out.push(v);
     }
+}
+
+/// JSON 文字列リテラルの中身として安全な形へ変換する式を返す。
+/// 制御文字 (U+0000〜U+001F) を除去し、`\` と `"` をエスケープする。
+/// PowerShell 側の実装と結果を一致させること。
+fn json_escape_expr(src: &str) -> String {
+    format!(r#""$(printf '%s' {src} | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')""#)
 }

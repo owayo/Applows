@@ -123,9 +123,16 @@ exit 0
 | `copy(from,to)` / `remove(path)` | Text,Text / Text | — | `cp` / `rm` | `Copy-Item` / `Remove-Item` |
 | `http_download(url,dest)` | Text,Text | Int | `curl -fSL`→一時→mv | `Invoke-WebRequest`→一時→mv |
 | `upper/lower/trim(s)` | Text | Text | `tr` / `sed` | `.ToUpper()/.ToLower()/.Trim()` |
+| `json_escape(s)` | Text | Text | `tr -d` + `sed` | `-replace` + `.Replace()` |
+| `json_add(json,key,value)` | Text,Text,Text | Text | `${v%\}}` で閉じ括弧を外して連結 | `.EndsWith()` + `.Substring()` |
 | `script_path()/script_dir()/cwd()` | — | Text | `$0`/`dirname`/`$PWD` | `$env:APPLOWS_SELF` 由来 |
 
 MVP から除外 (将来拡張): 任意コード埋め込み、正規表現、リテラル置換 `replace`、辞書/オブジェクト、クロージャ、再帰、パイプライン、例外処理、非同期/並列。
+
+**JSON の値の取り出しは意図的に提供しない**。sh 側で正確に解析するには純シェル実装 (JSON.sh 等) を
+生成物へ埋め込むか sed による近似に頼るしかなく、PowerShell 側の `ConvertFrom-Json` と意味が揃わない。
+組み立て側 (`json_escape` / `json_add`) だけを提供し、`json_add` は JSON を解析せず
+閉じ波括弧の直前へ差し込むことで両 OS の結果を一致させている。
 
 ### `run_capture` の OS 差 (避けられないもの)
 

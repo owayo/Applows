@@ -239,6 +239,7 @@ Rules worth knowing:
 | Standard input | `read_stdin()` | UTF-8; empty (not blocking) when stdin is a terminal |
 | Network | `http_download(url, dest)`, `http_post(url, headers, body)` | download: `curl -fSL` / `Invoke-WebRequest`. POST: `curl` on both platforms; `0` ok / `1` failed / `2` bad input |
 | Text | `upper`, `lower`, `trim` | |
+| JSON | `json_escape(s)`, `json_add(json, key, value)` | Build-only, no parser: `json_add` splices `"key":"value"` in before the closing brace without parsing, so nested values are never reshaped. Reading values out of JSON is deliberately not provided (sh and PowerShell could not agree on semantics) |
 | Script location | `script_path()`, `script_dir()`, `cwd()` | |
 | Machine | `hostname()` | `uname -n` on macOS, NetBIOS name on Windows |
 

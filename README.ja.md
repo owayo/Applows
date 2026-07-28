@@ -239,6 +239,7 @@ greet("team")
 | 標準入力 | `read_stdin()` | UTF-8。端末から起動されたときはブロックせず空を返す |
 | ネットワーク | `http_download(url, dest)`, `http_post(url, headers, body)` | download: `curl -fSL` / `Invoke-WebRequest`。POST: 両 OS とも `curl`。`0` 成功 / `1` 失敗 / `2` 入力不正 |
 | テキスト | `upper`, `lower`, `trim` | |
+| JSON | `json_escape(s)`, `json_add(json, key, value)` | 組み立て専用でパーサは持たない。`json_add` は解析せずに閉じ波括弧の直前へ `"key":"value"` を差し込むため、入れ子は変形しない。値の取り出しは意図的に非提供 (両 OS で意味が揃わないため) |
 | スクリプト位置 | `script_path()`, `script_dir()`, `cwd()` | |
 | マシン | `hostname()` | macOS は `uname -n`、Windows は NetBIOS 名 |
 

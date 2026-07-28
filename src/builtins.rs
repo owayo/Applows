@@ -50,6 +50,8 @@ pub enum Builtin {
     Upper,
     Lower,
     Trim,
+    JsonEscape,
+    JsonAdd,
     ScriptPath,
     ScriptDir,
     Cwd,
@@ -79,6 +81,8 @@ impl Builtin {
             "upper" => Builtin::Upper,
             "lower" => Builtin::Lower,
             "trim" => Builtin::Trim,
+            "json_escape" => Builtin::JsonEscape,
+            "json_add" => Builtin::JsonAdd,
             "script_path" => Builtin::ScriptPath,
             "script_dir" => Builtin::ScriptDir,
             "cwd" => Builtin::Cwd,
@@ -109,6 +113,8 @@ impl Builtin {
             Builtin::Upper => "upper",
             Builtin::Lower => "lower",
             Builtin::Trim => "trim",
+            Builtin::JsonEscape => "json_escape",
+            Builtin::JsonAdd => "json_add",
             Builtin::ScriptPath => "script_path",
             Builtin::ScriptDir => "script_dir",
             Builtin::Cwd => "cwd",
@@ -133,7 +139,8 @@ impl Builtin {
             Builtin::Remove => &[Type::Text],
             Builtin::HttpDownload => &[Type::Text, Type::Text],
             Builtin::HttpPost => &[Type::Text, Type::List, Type::Text],
-            Builtin::Upper | Builtin::Lower | Builtin::Trim => &[Type::Text],
+            Builtin::Upper | Builtin::Lower | Builtin::Trim | Builtin::JsonEscape => &[Type::Text],
+            Builtin::JsonAdd => &[Type::Text, Type::Text, Type::Text],
             Builtin::ScriptPath | Builtin::ScriptDir | Builtin::Cwd | Builtin::Hostname => &[],
         }
     }
@@ -153,7 +160,11 @@ impl Builtin {
                 Type::Unit
             }
             Builtin::HttpDownload | Builtin::HttpPost => Type::Int,
-            Builtin::Upper | Builtin::Lower | Builtin::Trim => Type::Text,
+            Builtin::Upper
+            | Builtin::Lower
+            | Builtin::Trim
+            | Builtin::JsonEscape
+            | Builtin::JsonAdd => Type::Text,
             Builtin::ScriptPath | Builtin::ScriptDir | Builtin::Cwd | Builtin::Hostname => {
                 Type::Text
             }
