@@ -293,3 +293,54 @@ fn http_post_with_empty_headers_emits_no_loop() {
     // 空リテラルで `for x in ; do` を出すと sh 構文エラーになる
     assert!(!r.sh_payload.contains("in ; do"), "sh:\n{}", r.sh_payload);
 }
+
+#[test]
+fn run_capture_discards_stderr_and_normalizes_on_both_targets() {
+    let src = "let x = run_capture([\"git\", \"rev-parse\"], \"\")\nprint \"{x}\"\n";
+    let r = ok(src);
+
+    // sh: stdout だけ取り、CR を落とす。`VAR="$(...)"` の終了ステータスで採否を決める
+    assert!(
+        r.sh_payload.contains("2>/dev/null"),
+        "sh:\n{}",
+        r.sh_payload
+    );
+    assert!(
+        r.sh_payload.contains("tr -d '\\r'"),
+        "sh:\n{}",
+        r.sh_payload
+    );
+
+    // PS: 起動失敗は catch、非 0 終了は $LASTEXITCODE で弾く。
+    // 呼び出し先が $LASTEXITCODE を更新しないケースに備えて実行前に 0 へ戻す。
+    assert!(r.ps_payload.contains("2>$null"), "ps:\n{}", r.ps_payload);
+    assert!(
+        r.ps_payload.contains("$global:LASTEXITCODE = 0"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+    assert!(
+        r.ps_payload.contains("if ($LASTEXITCODE -eq 0)"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+    // 末尾 LF を落として sh の $() と揃える
+    assert!(r.ps_payload.contains("TrimEnd"), "ps:\n{}", r.ps_payload);
+}
+
+#[test]
+fn run_capture_with_args_guards_empty_argv() {
+    let src = "let x = run_capture(args(), \"d\")\nprint \"{x}\"\n";
+    let r = ok(src);
+    // 引数 0 個でコマンド未指定にならないよう、両バックエンドでガードする
+    assert!(
+        r.sh_payload.contains("[ \"$#\" -gt 0 ]"),
+        "sh:\n{}",
+        r.sh_payload
+    );
+    assert!(
+        r.ps_payload.contains("$__ap_args.Count -gt 0"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+}

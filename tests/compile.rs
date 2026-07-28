@@ -473,3 +473,42 @@ fn http_post_accepts_args_as_headers() {
     // args() をヘッダに使っても構文的には通る (List なので)
     ok("http_post(\"https://example.com\", args(), \"body\")\n");
 }
+
+#[test]
+fn run_capture_empty_argv_rejected() {
+    err_contains(
+        "let x = run_capture([], \"\")\nprint \"{x}\"\n",
+        "argv は空にできません",
+    );
+}
+
+#[test]
+fn run_capture_as_statement_rejected() {
+    // 戻り値こそが目的なので捨てさせない (出力不要なら run を使う)
+    err_contains(
+        "run_capture([\"echo\", \"hi\"], \"\")\n",
+        "戻り値が使われていません",
+    );
+}
+
+#[test]
+fn run_capture_requires_default() {
+    err_contains(
+        "let x = run_capture([\"echo\"])\nprint \"{x}\"\n",
+        "引数 2 個",
+    );
+}
+
+#[test]
+fn run_capture_default_must_be_text() {
+    err_contains(
+        "let x = run_capture([\"echo\"], 1)\nprint \"{x}\"\n",
+        "型が一致しません",
+    );
+}
+
+#[test]
+fn run_capture_accepts_args_as_argv() {
+    // args() を argv に使える (空なら default に落ちる)
+    ok("let x = run_capture(args(), \"\")\nprint \"{x}\"\n");
+}

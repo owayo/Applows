@@ -301,6 +301,43 @@ impl Ps {
                 ));
                 t
             }
+            Value::RunCapture { argv, default } => {
+                let d = self.materialize(default, pre);
+                let t = self.fresh_temp();
+                let raw = self.fresh_temp();
+                // 失敗時は default のまま。sh 側の if/else と同じ意味になるよう、
+                // 起動失敗 (catch) と非 0 終了 ($LASTEXITCODE) の両方で採用しない。
+                pre.push(format!("{t} = {d}"));
+                match argv {
+                    List::Literal(_) => {
+                        let cmd = self.render_argv(argv, pre);
+                        pre.push("try {".to_string());
+                        // 実行前に 0 へ戻す。$LASTEXITCODE を更新しない呼び出し先だと
+                        // 直前のコマンドの終了コードが残り、成功しても default を返してしまう。
+                        pre.push("  $global:LASTEXITCODE = 0".to_string());
+                        pre.push(format!("  {raw} = ({cmd} 2>$null)"));
+                        pre.push(format!(
+                            "  if ($LASTEXITCODE -eq 0) {{ {t} = (({raw} -join \"`n\").Replace(\"`r\", '')).TrimEnd(\"`n\") }}"
+                        ));
+                        pre.push("} catch { }".to_string());
+                    }
+                    // 引数 0 個で `& $null` 例外になるのを防ぐ (sh の `[ "$#" -gt 0 ]` に対応)
+                    List::Args => {
+                        pre.push("if ($__ap_args.Count -gt 0) {".to_string());
+                        pre.push("  try {".to_string());
+                        pre.push("    $global:LASTEXITCODE = 0".to_string());
+                        pre.push(format!(
+                            "    {raw} = (& $__ap_args[0] @($__ap_args | Select-Object -Skip 1) 2>$null)"
+                        ));
+                        pre.push(format!(
+                            "    if ($LASTEXITCODE -eq 0) {{ {t} = (({raw} -join \"`n\").Replace(\"`r\", '')).TrimEnd(\"`n\") }}"
+                        ));
+                        pre.push("  } catch { }".to_string());
+                        pre.push("}".to_string());
+                    }
+                }
+                t
+            }
             Value::HttpPost { url, headers, body } => {
                 self.render_http_post(url, headers, body, pre)
             }

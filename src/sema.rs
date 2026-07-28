@@ -444,12 +444,17 @@ impl Lowerer {
         fn_index: Option<usize>,
     ) -> Result<IrStmt, Diagnostic> {
         if let Some(builtin) = Builtin::from_name(name) {
-            if !builtin.is_side_effecting() {
+            if !builtin.discardable_as_statement() {
+                let note = if builtin == Builtin::RunCapture {
+                    "標準出力が要らないなら `run` を使う (`run_capture` は取得した出力を使うための組み込み)"
+                } else {
+                    "値を返す組み込みは `let x = ...` で受ける"
+                };
                 return Err(Diagnostic::error(
                     format!("`{name}` の戻り値が使われていません",),
                     span,
                 )
-                .with_note("値を返す組み込みは `let x = ...` で受ける"));
+                .with_note(note));
             }
             let call = self.lower_builtin_call(builtin, args, span, scope, fn_index)?;
             Ok(IrStmt::Discard { call })
@@ -625,6 +630,33 @@ impl Lowerer {
                 );
             }
             return Ok(Value::Run { argv });
+        }
+
+        // run_capture(list, default) も argv がリストのため特別扱い。
+        // 失敗時に返す値を必須引数にして、呼び出し側にフェイルセーフを書かせる
+        // (`env(name, default)` と同じ流儀)。
+        if builtin == Builtin::RunCapture {
+            if args.len() != 2 {
+                return Err(self.arity_err(builtin, args.len(), span));
+            }
+            let argv = self.lower_list(&args[0], scope, fn_index)?;
+            if let List::Literal(items) = &argv
+                && items.is_empty()
+            {
+                return Err(Diagnostic::error(
+                    "`run_capture([], ...)` の argv は空にできません",
+                    span,
+                )
+                .with_note(
+                    "先頭要素は実行するコマンド名にする: run_capture([\"cmd\", ...], \"\")",
+                ));
+            }
+            let (default, default_ty) = self.lower_value(&args[1], scope, fn_index)?;
+            self.expect(default_ty, Type::Text, args[1].span())?;
+            return Ok(Value::RunCapture {
+                argv,
+                default: Box::new(default),
+            });
         }
 
         // http_post(url, headers, body) はヘッダがリストのため run と同様に特別扱いする
@@ -1010,7 +1042,10 @@ fn loop_invariant_error(name: &str, before: Type, after: Type, span: Span) -> Di
 /// 値が副作用を持つか (run / ユーザ関数 / http_download 等)。複合条件での禁止判定に使う。
 fn value_has_side_effect(v: &Value) -> bool {
     match v {
-        Value::Run { .. } | Value::Call { .. } | Value::HttpPost { .. } => true,
+        Value::Run { .. }
+        | Value::RunCapture { .. }
+        | Value::Call { .. }
+        | Value::HttpPost { .. } => true,
         Value::Builtin { builtin, args } => {
             builtin.is_side_effecting() || args.iter().any(value_has_side_effect)
         }

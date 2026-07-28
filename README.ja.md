@@ -234,7 +234,7 @@ greet("team")
 |---|---|---|
 | 出力 | `print` (文) | 補間: `print "hello, {name}!"` |
 | 引数・環境変数 | `args()`, `arg(i)`, `argc()`, `env(name, default)` | |
-| プロセス | `run(argv)` | argv は `List`。終了コード (`Int`) を返す |
+| プロセス | `run(argv)`, `run_capture(argv, default)` | argv は `List`。`run` は終了コード (`Int`)、`run_capture` は標準出力 (`Text`) を返す (起動失敗・非 0 終了なら `default`) |
 | ファイルシステム | `exists`, `is_file`, `is_dir`, `read_text`, `write_text`, `append_text`, `copy`, `remove` | `write_text` はアトミック (一時ファイル + move) |
 | 標準入力 | `read_stdin()` | UTF-8。端末から起動されたときはブロックせず空を返す |
 | ネットワーク | `http_download(url, dest)`, `http_post(url, headers, body)` | download: `curl -fSL` / `Invoke-WebRequest`。POST: 両 OS とも `curl`。`0` 成功 / `1` 失敗 / `2` 入力不正 |

@@ -147,7 +147,8 @@ exit 0                        # 終了コード (0-255)。`exit` 単独 = exit 0
 | 関数 | 戻り | 用途 |
 |---|---|---|
 | `print EXPR` (文) | — | 改行付き出力 |
-| `run(list)` | Int (終了コード) | 外部コマンド実行 (argv 配列)。stdio は継承 (出力キャプチャ不可) |
+| `run(list)` | Int (終了コード) | 外部コマンド実行 (argv 配列)。stdio は継承 (出力は取れない → `run_capture`) |
+| `run_capture(list, default)` | Text (標準出力) | 外部コマンド実行 + stdout 取得。終了コード 0 のときだけ stdout、起動失敗・非 0 は `default`。stderr は捨てる。CR 除去 + 末尾改行削除。`args()` 可 (0 個なら `default`)。**戻り値を捨てる文には書けない** (出力不要なら `run`)。対象は外部実行ファイルのみ (cmdlet 不可) |
 | `env(name, default)` | Text | 環境変数。`name` は識別子リテラル (`"PATH"` 等) |
 | `arg(i)` / `argc()` / `args()` | Text / Int / List | スクリプト引数。`i` は 1 始まりの整数リテラル。**トップレベルのみ** (関数内不可)。反復は `for a in args()` |
 | `exists(p)` / `is_file(p)` / `is_dir(p)` | Bool | 存在判定 (条件でのみ使用可) |

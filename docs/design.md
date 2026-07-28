@@ -115,6 +115,7 @@ exit 0
 | `env(name, default)` | Text, Text | Text | `${NAME:-default}` | `$env:NAME` ?? default |
 | `args()` / `arg(i)` / `argc()` | — / Int / — | List/Text/Int | `$@` / `$1` / `$#` | `$__ap_args` |
 | `run(list)` | List | Int(終了コード) | argv を quote して実行 | `& argv[0] argv[1..]` |
+| `run_capture(list,default)` | List,Text | Text(標準出力) | `VAR="$(argv 2>/dev/null)"` の成否で採否 | `try { & argv 2>$null }` + `$LASTEXITCODE` |
 | `exists/is_file/is_dir(path)` | Text | Bool | `[ -e/-f/-d ]` | `Test-Path` |
 | `read_text(path)` | Text | Text | `IO.File`相当(cat) | `[IO.File]::ReadAllText(,UTF8)` |
 | `write_text(path,text)` | Text,Text | — | 一時ファイル→mv (原子的) | `[IO.File]::WriteAllText` (UTF-8 BOM 無し) |
@@ -124,7 +125,19 @@ exit 0
 | `upper/lower/trim(s)` | Text | Text | `tr` / `sed` | `.ToUpper()/.ToLower()/.Trim()` |
 | `script_path()/script_dir()/cwd()` | — | Text | `$0`/`dirname`/`$PWD` | `$env:APPLOWS_SELF` 由来 |
 
-MVP から除外 (将来拡張): 任意コード埋め込み、stdout キャプチャ、正規表現、リテラル置換 `replace`、辞書/オブジェクト、クロージャ、再帰、パイプライン、例外処理、非同期/並列。
+MVP から除外 (将来拡張): 任意コード埋め込み、正規表現、リテラル置換 `replace`、辞書/オブジェクト、クロージャ、再帰、パイプライン、例外処理、非同期/並列。
+
+### `run_capture` の OS 差 (避けられないもの)
+
+標準出力は「CR を除去 + 末尾改行をすべて削除」で正規化して両 OS を揃えているが、
+**孤立した CR** (改行を伴わない `\r`) だけは一致しない。sh は `tr -d '\r'` で除去するのに対し、
+PowerShell はネイティブコマンドの出力を受け取る時点で孤立 CR も行区切りとして扱うため、
+LF へ変わる。プログレス表示のようにカーソルを戻す出力を捕まえたときにだけ現れる差で、
+テキストを 1 行または複数行で返す通常のコマンドでは発生しない。
+
+同じ理由で `run_capture` の対象は**外部実行ファイル**に限る。PowerShell の cmdlet や
+エイリアスはオブジェクトを返し、Warning / Verbose など sh に対応物のないストリームも持つため、
+両 OS で同じ結果にならない。
 
 ## ブートストラップ (ポリグロットテンプレート)
 

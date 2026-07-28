@@ -234,7 +234,7 @@ Rules worth knowing:
 |---|---|---|
 | Output | `print` (statement) | interpolation: `print "hello, {name}!"` |
 | Arguments & environment | `args()`, `arg(i)`, `argc()`, `env(name, default)` | |
-| Processes | `run(argv)` | argv as a `List`; returns the exit code (`Int`) |
+| Processes | `run(argv)`, `run_capture(argv, default)` | argv as a `List`. `run` returns the exit code (`Int`); `run_capture` returns stdout (`Text`), falling back to `default` when the command cannot start or exits non-zero |
 | Filesystem | `exists`, `is_file`, `is_dir`, `read_text`, `write_text`, `append_text`, `copy`, `remove` | `write_text` is atomic (temp file + move) |
 | Standard input | `read_stdin()` | UTF-8; empty (not blocking) when stdin is a terminal |
 | Network | `http_download(url, dest)`, `http_post(url, headers, body)` | download: `curl -fSL` / `Invoke-WebRequest`. POST: `curl` on both platforms; `0` ok / `1` failed / `2` bad input |

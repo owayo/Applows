@@ -254,3 +254,78 @@ fn file_io_roundtrip() {
     assert_eq!(code, 0);
     assert!(!f.exists(), "remove でファイルが消えるべき");
 }
+
+#[test]
+fn run_capture_takes_stdout_and_falls_back() {
+    // 成功 -> stdout / 起動失敗・非 0 終了 -> default / 成功して空出力 -> 空文字 (default ではない)
+    let src = concat!(
+        "let ok = run_capture([\"printf\", \"hello\"], \"(default)\")\n",
+        "print \"ok=[{ok}]\"\n",
+        "let missing = run_capture([\"applows-no-such-command\"], \"(missing)\")\n",
+        "print \"missing=[{missing}]\"\n",
+        "let failed = run_capture([\"sh\", \"-c\", \"echo out; exit 3\"], \"(failed)\")\n",
+        "print \"failed=[{failed}]\"\n",
+        "let empty = run_capture([\"sh\", \"-c\", \"exit 0\"], \"(unused)\")\n",
+        "print \"empty=[{empty}]\"\n",
+        "let noise = run_capture([\"sh\", \"-c\", \"echo warn >&2; echo real\"], \"\")\n",
+        "print \"noise=[{noise}]\"\n",
+    );
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(
+        out,
+        "ok=[hello]\nmissing=[(missing)]\nfailed=[(failed)]\nempty=[]\nnoise=[real]\n"
+    );
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn run_capture_normalizes_line_endings() {
+    // 末尾 LF は何個あっても全部落とし、CRLF は LF に、行途中の空行は保持する。
+    // PowerShell 側 (行配列を LF 結合 + TrimEnd) と同じ結果になることを固定する。
+    let src = concat!(
+        "let trail = run_capture([\"sh\", \"-c\", \"printf 'z\\n\\n\\n'\"], \"\")\n",
+        "print \"trail=[{trail}]\"\n",
+        "let inner = run_capture([\"sh\", \"-c\", \"printf 'p\\n\\nq\\n'\"], \"\")\n",
+        "print \"inner=[{inner}]\"\n",
+        "let crlf = run_capture([\"sh\", \"-c\", \"printf 'x\\r\\ny\\r\\n'\"], \"\")\n",
+        "print \"crlf=[{crlf}]\"\n",
+        "let bare = run_capture([\"sh\", \"-c\", \"printf 'no-final-newline'\"], \"\")\n",
+        "print \"bare=[{bare}]\"\n",
+    );
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(
+        out,
+        "trail=[z]\ninner=[p\n\nq]\ncrlf=[x\ny]\nbare=[no-final-newline]\n"
+    );
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn run_capture_with_args_falls_back_when_empty() {
+    // args() が空ならコマンド未指定なので実行せず default
+    // (PowerShell 側の `$__ap_args.Count -gt 0` ガードと揃える)
+    let src = "let out = run_capture(args(), \"(no args)\")\nprint \"out=[{out}]\"\n";
+    let script = build_temp(src);
+
+    let (out, code) = run_both(&script, &["/bin/echo", "hi"]);
+    assert_eq!(out, "out=[hi]\n");
+    assert_eq!(code, 0);
+
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(out, "out=[(no args)]\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn run_capture_handles_utf8_and_spaces() {
+    let src = concat!(
+        "let s = run_capture([\"printf\", \"%s\", \"日本語 と 空白\"], \"\")\n",
+        "print \"s=[{s}]\"\n",
+    );
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(out, "s=[日本語 と 空白]\n");
+    assert_eq!(code, 0);
+}

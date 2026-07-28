@@ -287,6 +287,30 @@ impl Sh {
                 pre.push(format!("{t}=$?"));
                 format!("\"${t}\"")
             }
+            Value::RunCapture { argv, default } => {
+                let d = self.materialize(default, pre);
+                let cmd = self.render_argv(argv, pre);
+                let raw = self.fresh_temp();
+                let t = self.fresh_temp();
+                // `VAR="$(cmd)"` の終了ステータスはコマンド置換のものになるので、
+                // そのまま if の条件に使える (非 0 終了・command not found は else へ)。
+                // args() が空のときはコマンド未指定なので実行せず default にする
+                // (PowerShell 側の `$__ap_args.Count -gt 0` ガードと挙動を揃える)。
+                let guard = match argv {
+                    List::Args => "[ \"$#\" -gt 0 ] && ".to_string(),
+                    List::Literal(_) => String::new(),
+                };
+                pre.push(format!("if {guard}{raw}=\"$({cmd} 2>/dev/null)\"; then"));
+                // 行区切りを LF に正規化する (PowerShell はネイティブ出力を行配列で受け取り
+                // LF で結合するため、CR を残すと OS 差になる)。
+                pre.push(format!(
+                    "  {t}=\"$(printf '%s' \"${{{raw}}}\" | tr -d '\\r')\""
+                ));
+                pre.push("else".to_string());
+                pre.push(format!("  {t}={d}"));
+                pre.push("fi".to_string());
+                format!("\"${t}\"")
+            }
             Value::HttpPost { url, headers, body } => {
                 self.render_http_post(url, headers, body, pre)
             }

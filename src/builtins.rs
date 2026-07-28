@@ -35,6 +35,7 @@ pub enum Builtin {
     Argc,
     Args,
     Run,
+    RunCapture,
     Exists,
     IsFile,
     IsDir,
@@ -63,6 +64,7 @@ impl Builtin {
             "argc" => Builtin::Argc,
             "args" => Builtin::Args,
             "run" => Builtin::Run,
+            "run_capture" => Builtin::RunCapture,
             "exists" => Builtin::Exists,
             "is_file" => Builtin::IsFile,
             "is_dir" => Builtin::IsDir,
@@ -92,6 +94,7 @@ impl Builtin {
             Builtin::Argc => "argc",
             Builtin::Args => "args",
             Builtin::Run => "run",
+            Builtin::RunCapture => "run_capture",
             Builtin::Exists => "exists",
             Builtin::IsFile => "is_file",
             Builtin::IsDir => "is_dir",
@@ -121,6 +124,7 @@ impl Builtin {
             Builtin::Argc => &[],
             Builtin::Args => &[],
             Builtin::Run => &[Type::List],
+            Builtin::RunCapture => &[Type::List, Type::Text],
             Builtin::Exists | Builtin::IsFile | Builtin::IsDir => &[Type::Text],
             Builtin::ReadText => &[Type::Text],
             Builtin::ReadStdin => &[],
@@ -142,6 +146,7 @@ impl Builtin {
             Builtin::Argc => Type::Int,
             Builtin::Args => Type::List,
             Builtin::Run => Type::Int,
+            Builtin::RunCapture => Type::Text,
             Builtin::Exists | Builtin::IsFile | Builtin::IsDir => Type::Bool,
             Builtin::ReadText | Builtin::ReadStdin => Type::Text,
             Builtin::WriteText | Builtin::AppendText | Builtin::Copy | Builtin::Remove => {
@@ -165,8 +170,7 @@ impl Builtin {
         matches!(self, Builtin::Arg)
     }
 
-    /// 副作用を持つか。単独の文として書けるか (戻り値を捨てられるか) と、
-    /// 条件式 (`and` / `or` / `not` の内側) へ書けないかの判定に使う。
+    /// 副作用を持つか。条件式 (`and` / `or` / `not` の内側) へ書けないかの判定に使う。
     /// `read_stdin` は標準入力を消費し 2 回目が空になるため副作用扱いにする。
     pub fn is_side_effecting(self) -> bool {
         matches!(
@@ -176,9 +180,18 @@ impl Builtin {
                 | Builtin::Copy
                 | Builtin::Remove
                 | Builtin::Run
+                | Builtin::RunCapture
                 | Builtin::ReadStdin
                 | Builtin::HttpDownload
                 | Builtin::HttpPost
         )
+    }
+
+    /// 戻り値を捨てる単独の文として書けるか。
+    /// 副作用があっても戻り値こそが目的の組み込み (`run_capture`) は捨てさせない
+    /// — 出力が要らないなら `run` を使うべきで、捨てると stdout も stderr も
+    /// 消える紛らわしい処理になるため。
+    pub fn discardable_as_statement(self) -> bool {
+        self.is_side_effecting() && !matches!(self, Builtin::RunCapture)
     }
 }

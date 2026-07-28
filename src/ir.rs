@@ -80,6 +80,12 @@ pub enum Value {
     Run {
         argv: List,
     },
+    /// 外部コマンド実行 + 標準出力の取得。終了コード 0 なら stdout、
+    /// 起動失敗・非 0 終了なら `default` を返す。`Run` と同じくリストを持つため専用の枝。
+    RunCapture {
+        argv: List,
+        default: Box<Value>,
+    },
     /// HTTP POST。`0`=成功 / `1`=通信・HTTP 失敗 / `2`=入力不正 を返す。
     /// ヘッダだけがリストなので `Value::Builtin` に載せられず、`Run` と同様に専用の枝を持つ。
     HttpPost {
