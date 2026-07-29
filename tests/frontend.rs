@@ -39,6 +39,22 @@ fn powershell_run_has_launch_guard() {
 }
 
 #[test]
+fn run_with_empty_args_returns_127_on_both_targets() {
+    let r = ok("let code = run(args())\nprint \"{code}\"\n");
+    assert!(
+        r.sh_payload.contains("else __ap_t"),
+        "sh:\n{}",
+        r.sh_payload
+    );
+    assert!(r.sh_payload.contains("=127; fi"), "sh:\n{}", r.sh_payload);
+    assert!(
+        r.ps_payload.contains("else { $__ap_t") && r.ps_payload.contains(" = 127 }"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+}
+
+#[test]
 fn newline_in_string_powershell_safe() {
     // 改行を含む文字列: PS の single-quoted は複数行不可なので [char]10 へ退避する
     let r = ok("print \"line1\\nline2\"\n");
@@ -299,14 +315,9 @@ fn run_capture_discards_stderr_and_normalizes_on_both_targets() {
     let src = "let x = run_capture([\"git\", \"rev-parse\"], \"\")\nprint \"{x}\"\n";
     let r = ok(src);
 
-    // sh: stdout だけ取り、CR を落とす。`VAR="$(...)"` の終了ステータスで採否を決める
+    // sh: stdout だけ取り、`VAR="$(...)"` の終了ステータスで採否を決める
     assert!(
         r.sh_payload.contains("2>/dev/null"),
-        "sh:\n{}",
-        r.sh_payload
-    );
-    assert!(
-        r.sh_payload.contains("tr -d '\\r'"),
         "sh:\n{}",
         r.sh_payload
     );
@@ -326,6 +337,17 @@ fn run_capture_discards_stderr_and_normalizes_on_both_targets() {
     );
     // 末尾 LF を落として sh の $() と揃える
     assert!(r.ps_payload.contains("TrimEnd"), "ps:\n{}", r.ps_payload);
+    // /bin/sh と zsh で保持可否が異なる NUL も両ターゲットで除去する
+    assert!(
+        r.sh_payload.contains("tr -d '\\000\\r'"),
+        "sh:\n{}",
+        r.sh_payload
+    );
+    assert!(
+        r.ps_payload.contains("Replace([string][char]0, '')"),
+        "ps:\n{}",
+        r.ps_payload
+    );
 }
 
 #[test]
@@ -375,5 +397,80 @@ fn run_capture_with_args_guards_empty_argv() {
         r.ps_payload.contains("$__ap_args.Count -gt 0"),
         "ps:\n{}",
         r.ps_payload
+    );
+}
+
+#[test]
+fn for_range_checks_endpoint_before_incrementing() {
+    let src = concat!(
+        "for i in 9223372036854775807 to 9223372036854775807 {\n",
+        "  print \"{i}\"\n",
+        "}\n",
+    );
+    let r = ok(src);
+    assert!(
+        r.sh_payload.contains("then break; fi"),
+        "sh:\n{}",
+        r.sh_payload
+    );
+    assert!(
+        r.ps_payload.contains("-eq") && r.ps_payload.contains("{ break }"),
+        "ps:\n{}",
+        r.ps_payload
+    );
+}
+
+#[test]
+fn list_value_preludes_are_emitted_before_iteration() {
+    let src = concat!(
+        "for item in [json_add(\"\\{\\}\", \"k\", \"v\")] {\n",
+        "  print \"{item}\"\n",
+        "}\n",
+    );
+    let r = ok(src);
+    let sh_json = r.sh_payload.find("case \"").expect("sh の JSON 前処理");
+    let sh_loop = r.sh_payload.find("for __ap_").expect("sh の for");
+    assert!(sh_json < sh_loop, "sh:\n{}", r.sh_payload);
+
+    let ps_json = r
+        .ps_payload
+        .find(".StartsWith('{')")
+        .expect("PowerShell の JSON 前処理");
+    let ps_loop = r
+        .ps_payload
+        .find("foreach ($__ap_")
+        .expect("PowerShell の for");
+    assert!(ps_json < ps_loop, "ps:\n{}", r.ps_payload);
+}
+
+#[test]
+fn http_post_materializes_header_values_before_iteration() {
+    let src = concat!(
+        "let status = http_post(\"https://example.com\", ",
+        "[json_add(\"\\{\\}\", \"k\", \"v\")], \"body\")\n",
+    );
+    let r = ok(src);
+    let sh_json = r.sh_payload.find("case \"").expect("sh の JSON 前処理");
+    let sh_headers = r.sh_payload.find(" in \"${").expect("sh のヘッダ反復");
+    assert!(sh_json < sh_headers, "sh:\n{}", r.sh_payload);
+
+    let ps_json = r
+        .ps_payload
+        .find(".StartsWith('{')")
+        .expect("PowerShell の JSON 前処理");
+    let ps_headers = r
+        .ps_payload
+        .find("foreach ($__ap_")
+        .expect("PowerShell のヘッダ反復");
+    assert!(ps_json < ps_headers, "ps:\n{}", r.ps_payload);
+}
+
+#[test]
+fn http_download_url_cannot_be_parsed_as_a_curl_option() {
+    let r = ok("let status = http_download(\"-K/tmp/evil\", \"/tmp/out\")\n");
+    assert!(
+        r.sh_payload.contains("curl -fsSL --url"),
+        "sh:\n{}",
+        r.sh_payload
     );
 }

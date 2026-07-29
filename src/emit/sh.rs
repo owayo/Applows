@@ -128,12 +128,18 @@ impl Sh {
                 self.indent += 1;
                 self.line(&format!("{var}=\"${counter}\""));
                 self.emit_stmts(body);
+                // 終端値で先に抜け、i64::MAX の次を計算して符号反転するのを防ぐ。
+                self.line(&format!(
+                    "if [ \"${counter}\" -eq \"${end_tmp}\" ]; then break; fi"
+                ));
                 self.line(&format!("{counter}=$(({counter} + 1))"));
                 self.indent -= 1;
                 self.line("done");
             }
             IrStmt::ForEach { var, list, body } => {
-                let items = self.render_list(list);
+                let mut pre = Vec::new();
+                let items = self.render_list(list, &mut pre);
+                self.emit_pre(&pre);
                 self.line(&format!("for {var} in {items}; do"));
                 self.indent += 1;
                 self.emit_stmts(body);
@@ -281,10 +287,19 @@ impl Sh {
                 format!("\"$(({l} {} {r}))\"", arith_op(*op))
             }
             Value::Run { argv } => {
-                let cmd = self.render_argv(argv, pre);
                 let t = self.fresh_temp();
-                pre.push(cmd);
-                pre.push(format!("{t}=$?"));
+                match argv {
+                    List::Literal(_) => {
+                        let cmd = self.render_argv(argv, pre);
+                        pre.push(cmd);
+                        pre.push(format!("{t}=$?"));
+                    }
+                    List::Args => {
+                        pre.push(format!(
+                            "if [ \"$#\" -gt 0 ]; then \"$@\"; {t}=$?; else {t}=127; fi"
+                        ));
+                    }
+                }
                 format!("\"${t}\"")
             }
             Value::RunCapture { argv, default } => {
@@ -301,10 +316,10 @@ impl Sh {
                     List::Literal(_) => String::new(),
                 };
                 pre.push(format!("if {guard}{raw}=\"$({cmd} 2>/dev/null)\"; then"));
-                // 行区切りを LF に正規化する (PowerShell はネイティブ出力を行配列で受け取り
-                // LF で結合するため、CR を残すと OS 差になる)。
+                // 行区切りを LF に正規化する。NUL は /bin/sh のコマンド置換では失われる一方、
+                // zsh では保持されるため、明示的に除去して両者と PowerShell の結果を揃える。
                 pre.push(format!(
-                    "  {t}=\"$(printf '%s' \"${{{raw}}}\" | tr -d '\\r')\""
+                    "  {t}=\"$(printf '%s' \"${{{raw}}}\" | tr -d '\\000\\r')\""
                 ));
                 pre.push("else".to_string());
                 pre.push(format!("  {t}={d}"));
@@ -407,6 +422,8 @@ impl Sh {
                 let base = self.fresh_temp();
                 let cut = self.fresh_temp();
                 let inner = self.fresh_temp();
+                let lead = self.fresh_temp();
+                let rest = self.fresh_temp();
                 let out = self.fresh_temp();
 
                 pre.push(format!("{ek}={}", json_escape_expr(&key)));
@@ -424,13 +441,28 @@ impl Sh {
                 pre.push(format!(
                     r#"  {inner}="$(printf '%s' "${{{cut}}}" | sed -e 's/[[:space:]]*$//')""#
                 ));
-                pre.push(format!(r#"  if [ "${{{inner}}}" = '{{' ]; then"#));
-                pre.push(format!(r#"    {out}="{{\"${{{ek}}}\":\"${{{ev}}}\"}}""#));
-                pre.push("  else".to_string());
                 pre.push(format!(
-                    r#"    {out}="${{{inner}}},\"${{{ek}}}\":\"${{{ev}}}\"}}""#
+                    r#"  {lead}="$(printf '%s' "${{{inner}}}" | sed -e 's/^[[:space:]]*//')""#
                 ));
-                pre.push("  fi".to_string());
+                pre.push(format!(r#"  case "${{{lead}}}" in"#));
+                pre.push("    \\{*)".to_string());
+                pre.push(format!(
+                    r#"      {rest}="$(printf '%s' "${{{lead}}}" | sed -e 's/^{{//' -e 's/[[:space:]]*$//')""#
+                ));
+                pre.push(format!(r#"      if [ -z "${{{rest}}}" ]; then"#));
+                pre.push(format!(
+                    r#"        {out}="${{{inner}}}\"${{{ek}}}\":\"${{{ev}}}\"}}""#
+                ));
+                pre.push("      else".to_string());
+                pre.push(format!(
+                    r#"        {out}="${{{inner}}},\"${{{ek}}}\":\"${{{ev}}}\"}}""#
+                ));
+                pre.push("      fi".to_string());
+                pre.push("      ;;".to_string());
+                pre.push("    *)".to_string());
+                pre.push(format!(r#"      {out}="${{{base}}}""#));
+                pre.push("      ;;".to_string());
+                pre.push("  esac".to_string());
                 pre.push("fi".to_string());
                 format!("\"${{{out}}}\"")
             }
@@ -463,7 +495,7 @@ impl Sh {
         let t = self.fresh_temp();
         pre.push(format!("{d}={dest}"));
         pre.push(format!(
-            "if curl -fsSL {url} -o \"${d}.part.$$\"; then mv -f \"${d}.part.$$\" \"${d}\"; {t}=0; else rm -f \"${d}.part.$$\"; {t}=1; fi"
+            "if curl -fsSL --url {url} -o \"${d}.part.$$\"; then mv -f \"${d}.part.$$\" \"${d}\"; {t}=0; else rm -f \"${d}.part.$$\"; {t}=1; fi"
         ));
         format!("\"${t}\"")
     }
@@ -489,10 +521,10 @@ impl Sh {
         let ok = self.fresh_temp();
         let hv = self.fresh_temp();
 
-        // 空のリテラルリストは `for x in ; do` になり構文エラーなので、ループごと省く。
+        // 空のリテラルリストではヘッダ走査が不要なため、ループごと省く。
         let header_words = match headers {
             List::Literal(items) if items.is_empty() => None,
-            other => Some(self.render_list(other)),
+            other => Some(self.render_list(other, pre)),
         };
 
         pre.push(format!("{t}=2"));
@@ -534,15 +566,10 @@ impl Sh {
     }
 
     /// for-each の反復子。
-    fn render_list(&mut self, list: &List) -> String {
+    fn render_list(&mut self, list: &List, pre: &mut Vec<String>) -> String {
         match list {
             List::Literal(items) => {
-                let mut pre = Vec::new();
-                let words: Vec<String> = items
-                    .iter()
-                    .map(|v| self.materialize(v, &mut pre))
-                    .collect();
-                // for-each のリテラルは副作用を含まない前提 (sema が Text/Int に限定)
+                let words: Vec<String> = items.iter().map(|v| self.materialize(v, pre)).collect();
                 words.join(" ")
             }
             List::Args => "\"$@\"".to_string(),

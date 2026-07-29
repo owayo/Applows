@@ -248,7 +248,7 @@ The full grammar, type rules, and per-target mappings are specified in [docs/des
 ## Limitations (MVP)
 
 - The Unix target is **macOS's `/bin/sh` (bash) and `zsh`** specifically — not generic POSIX `sh`. The polyglot header uses the `function` keyword, so `dash` (the default `/bin/sh` on Debian/Ubuntu) is not supported.
-- Not yet available: capturing stdout of `run`, regular expressions, string `replace`, dictionaries/objects, closures, recursion, pipelines, exception handling, async/parallel execution.
+- Not yet available: regular expressions, string `replace`, dictionaries/objects, closures, recursion, pipelines, exception handling, async/parallel execution. Use `run_capture` when stdout is needed as a value.
 - No raw sh / PowerShell embedding — a deliberate restriction that preserves the injection-safety guarantees.
 - On Windows, `cmd.exe` quoting restricts some characters in arguments forwarded to the script (`%`, `!`, `&`, ...); the safe set is pinned by E2E tests.
 

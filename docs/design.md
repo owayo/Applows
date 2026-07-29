@@ -121,10 +121,10 @@ exit 0
 | `write_text(path,text)` | Text,Text | — | 一時ファイル→mv (原子的) | `[IO.File]::WriteAllText` (UTF-8 BOM 無し) |
 | `append_text(path,text)` | Text,Text | — | `>>` | `[IO.File]::AppendAllText` |
 | `copy(from,to)` / `remove(path)` | Text,Text / Text | — | `cp` / `rm` | `Copy-Item` / `Remove-Item` |
-| `http_download(url,dest)` | Text,Text | Int | `curl -fSL`→一時→mv | `Invoke-WebRequest`→一時→mv |
+| `http_download(url,dest)` | Text,Text | Int | `curl -fsSL --url`→一時→mv | `Invoke-WebRequest`→一時→mv |
 | `upper/lower/trim(s)` | Text | Text | `tr` / `sed` | `.ToUpper()/.ToLower()/.Trim()` |
 | `json_escape(s)` | Text | Text | `tr -d` + `sed` | `-replace` + `.Replace()` |
-| `json_add(json,key,value)` | Text,Text,Text | Text | `${v%\}}` で閉じ括弧を外して連結 | `.EndsWith()` + `.Substring()` |
+| `json_add(json,key,value)` | Text,Text,Text | Text | 先頭 `{` / 末尾 `}` を確認後 `${v%\}}` で連結 | `.StartsWith()` / `.EndsWith()` + `.Substring()` |
 | `script_path()/script_dir()/cwd()` | — | Text | `$0`/`dirname`/`$PWD` | `$env:APPLOWS_SELF` 由来 |
 
 MVP から除外 (将来拡張): 任意コード埋め込み、正規表現、リテラル置換 `replace`、辞書/オブジェクト、クロージャ、再帰、パイプライン、例外処理、非同期/並列。
@@ -136,7 +136,7 @@ MVP から除外 (将来拡張): 任意コード埋め込み、正規表現、�
 
 ### `run_capture` の OS 差 (避けられないもの)
 
-標準出力は「CR を除去 + 末尾改行をすべて削除」で正規化して両 OS を揃えているが、
+標準出力は「NUL と CR を除去 + 末尾改行をすべて削除」で正規化して両 OS を揃えているが、
 **孤立した CR** (改行を伴わない `\r`) だけは一致しない。sh は `tr -d '\r'` で除去するのに対し、
 PowerShell はネイティブコマンドの出力を受け取る時点で孤立 CR も行区切りとして扱うため、
 LF へ変わる。プログレス表示のようにカーソルを戻す出力を捕まえたときにだけ現れる差で、
@@ -230,7 +230,7 @@ Windows 側 (Batch + Windows PowerShell 5.1) は CI (`windows-latest`) の E2E �
 
 ## クロス OS レビューで確認した既知の挙動差 (codex/grok/コードレビュー)
 
-複数 AI による全体レビューで、以下は「実バグ」として修正済み: env 名インジェクション、if/else の型発散、複合条件の副作用非短絡、`arg(0)`、重複パラメータ、ループ不変条件の破れ、for-each 要素の副作用消失、PowerShell 整数除算 (`/` が浮動小数)、存在しないコマンドの終了コード (sh=127 / PS 例外→両者 127 に統一)、`remove` の欠損ファイル扱い、改行を含む文字列の PowerShell 生成 (`[char]10`)、`\r` の verify 衝突、符号付き 64bit 整数の最小値拒否、同一行の複数文受理、過剰ネスト・長大な演算子列によるコンパイラのスタックオーバーフロー、Unix 実行権限付与時のエラー握りつぶしと権限拡張。
+複数 AI による全体レビューで、以下は「実バグ」として修正済み: env 名インジェクション、if/else の型発散、複合条件の副作用非短絡、`arg(0)`、重複パラメータ、ループ不変条件の破れ、for-each / HTTP ヘッダ要素の前処理消失、PowerShell 整数除算 (`/` が浮動小数)、存在しないコマンドと空の `run(args())` の終了コード統一、`run_capture` の NUL による sh/zsh 差、`remove` の欠損ファイル扱い、改行を含む文字列の PowerShell 生成 (`[char]10`)、`\r` の verify 衝突、符号付き 64bit 整数の最小値拒否、最大値だけを反復する for-range のオーバーフロー、`http_download` URL の curl オプション解釈、非オブジェクトを加工する `json_add`、同一行の複数文受理、過剰ネスト・長大な演算子列によるコンパイラのスタックオーバーフロー、Unix 実行権限付与時のエラー握りつぶしと権限拡張。
 
 コンパイラは、再帰下降の深さと再帰走査する式の複合要素数をそれぞれ 256 までに制限する。上限超過は `Diagnostic` として返し、入力によるプロセス abort を防ぐ。分岐代入名と sh 関数ローカルの収集は、出現順を保つ `Vec` と重複判定用 `HashSet` を併用し、O(n²) の線形重複探索を避ける。
 
@@ -240,6 +240,5 @@ Windows 側 (Batch + Windows PowerShell 5.1) は CI (`windows-latest`) の E2E �
 |---|---|---|
 | `read_text` / `upper` / `lower` / `trim` の末尾改行 | sh はコマンド置換 `$()` が末尾改行を除去、PowerShell は保持 | 末尾改行に依存しない使い方をする。将来 sentinel 方式で統一予定 |
 | `exit` / `return` の終了コード範囲 | Unix の終了コードは 0–255 (8bit)。256 以上は sh で剰余に丸められ、PowerShell とずれる | 終了コードは 0–255 に収める |
-| `run(args())` の引数 0 個 | sh は直前の `$?`、PowerShell は 0 個ガードで実行しない | 実行前に `argc()` で確認する |
 | `write_text` / `append_text` / `copy` / `read_text` の失敗 | PowerShell は `$ErrorActionPreference='Stop'` で致命 (exit 1)、sh は継続し得る | 失敗し得る操作は事前に `exists()` で確認する。将来両 OS で致命に統一予定 |
 | 除算のゼロ割 / オーバーフロー | sh と PowerShell でエラー形態が異なる | ゼロ割を避ける |

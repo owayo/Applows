@@ -24,6 +24,7 @@ __ap_t1=5
 while [ "$__ap_t0" -le "$__ap_t1" ]; do
   __ap_v3="$__ap_t0"
   __ap_v2="$((__ap_v2 + __ap_v3))"
+  if [ "$__ap_t0" -eq "$__ap_t1" ]; then break; fi
   __ap_t0=$((__ap_t0 + 1))
 done
 printf '%s\n' 'sum='"${__ap_v2}"
@@ -60,6 +61,7 @@ try {
   while ($__ap_t0 -le $__ap_t1) {
     $__ap_v3 = $__ap_t0
     $__ap_v2 = ([long]$__ap_v2 + [long]$__ap_v3)
+    if ($__ap_t0 -eq $__ap_t1) { break }
     $__ap_t0 = $__ap_t0 + 1
   }
   [Console]::Out.WriteLine(('sum=' + [string]$__ap_v2))

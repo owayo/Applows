@@ -147,8 +147,8 @@ exit 0                        # 終了コード (0-255)。`exit` 単独 = exit 0
 | 関数 | 戻り | 用途 |
 |---|---|---|
 | `print EXPR` (文) | — | 改行付き出力 |
-| `run(list)` | Int (終了コード) | 外部コマンド実行 (argv 配列)。stdio は継承 (出力は取れない → `run_capture`) |
-| `run_capture(list, default)` | Text (標準出力) | 外部コマンド実行 + stdout 取得。終了コード 0 のときだけ stdout、起動失敗・非 0 は `default`。stderr は捨てる。CR 除去 + 末尾改行削除。`args()` 可 (0 個なら `default`)。**戻り値を捨てる文には書けない** (出力不要なら `run`)。対象は外部実行ファイルのみ (cmdlet 不可) |
+| `run(list)` | Int (終了コード) | 外部コマンド実行 (argv 配列)。stdio は継承 (出力は取れない → `run_capture`)。起動失敗と空の `run(args())` は 127 |
+| `run_capture(list, default)` | Text (標準出力) | 外部コマンド実行 + stdout 取得。終了コード 0 のときだけ stdout、起動失敗・非 0 は `default`。stderr は捨てる。NUL/CR 除去 + 末尾改行削除。`args()` 可 (0 個なら `default`)。**戻り値を捨てる文には書けない** (出力不要なら `run`)。対象は外部実行ファイルのみ (cmdlet 不可) |
 | `env(name, default)` | Text | 環境変数。`name` は識別子リテラル (`"PATH"` 等) |
 | `arg(i)` / `argc()` / `args()` | Text / Int / List | スクリプト引数。`i` は 1 始まりの整数リテラル。**トップレベルのみ** (関数内不可)。反復は `for a in args()` |
 | `exists(p)` / `is_file(p)` / `is_dir(p)` | Bool | 存在判定 (条件でのみ使用可) |
@@ -160,7 +160,7 @@ exit 0                        # 終了コード (0-255)。`exit` 単独 = exit 0
 | `http_post(url, headers, body)` | Int (0=成功 / 1=失敗 / 2=入力不正) | POST。`headers` は `["Name: value", ...]` のリストリテラル (変数不可、値の補間は可)。秘密情報はファイル経由で渡すのでコマンドライン引数に出ない。CR/LF を含むヘッダは送らず 2 を返す |
 | `upper(s)` / `lower(s)` / `trim(s)` | Text | 文字列変換 |
 | `json_escape(s)` | Text | JSON 文字列リテラル用にエスケープ (`\` と `"`、制御文字は除去) |
-| `json_add(json, key, value)` | Text | top-level オブジェクトの閉じ波括弧の直前へ `"key":"value"` を追記。**JSON を解析しない**ので中身は変形しない。値は文字列のみ。同名キーは上書きせず重複する。末尾が `}` でなければそのまま返す。key/value は自動エスケープ。JSON の**値の取り出しは提供しない** (両 OS で意味が揃わないため) |
+| `json_add(json, key, value)` | Text | top-level オブジェクトの閉じ波括弧の直前へ `"key":"value"` を追記。**JSON を解析しない**。値は文字列のみ。同名キーは上書きせず重複する。制御文字除去・末尾空白削除後、先頭非空白が `{` かつ末尾が `}` でなければ正規化後の入力を返す。key/value は自動エスケープ。JSON の**値の取り出しは提供しない** (両 OS で意味が揃わないため) |
 | `script_path()` / `script_dir()` / `cwd()` | Text | 自スクリプトのパス / ディレクトリ / カレント |
 | `hostname()` | Text | ホスト名 (macOS は `uname -n`、Windows は NetBIOS 名。表記は揃わない) |
 

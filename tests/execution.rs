@@ -124,11 +124,33 @@ fn args_and_utf8() {
 }
 
 #[test]
+fn run_with_empty_args_returns_command_not_found() {
+    let src = "let code = run(args())\nprint \"code={code}\"\n";
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(out, "code=127\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn signed_integer_boundaries() {
     let src = "print 9223372036854775807\nprint -9223372036854775808\n";
     let script = build_temp(src);
     let (out, code) = run_both(&script, &[]);
     assert_eq!(out, "9223372036854775807\n-9223372036854775808\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn for_range_at_integer_max_terminates() {
+    let src = concat!(
+        "for i in 9223372036854775807 to 9223372036854775807 {\n",
+        "  print \"i={i}\"\n",
+        "}\n",
+    );
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(out, "i=9223372036854775807\n");
     assert_eq!(code, 0);
 }
 
@@ -303,6 +325,20 @@ fn run_capture_normalizes_line_endings() {
 }
 
 #[test]
+fn run_capture_removes_nul_on_both_shells() {
+    // /bin/sh はコマンド置換で NUL を暗黙除去するが zsh は保持するため、
+    // コンパイラが明示的に除去して結果を揃える。
+    let src = concat!(
+        "let value = run_capture([\"sh\", \"-c\", \"printf 'a\\\\000b'\"], \"\")\n",
+        "print \"value=[{value}]\"\n",
+    );
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(out, "value=[ab]\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn run_capture_with_args_falls_back_when_empty() {
     // args() が空ならコマンド未指定なので実行せず default
     // (PowerShell 側の `$__ap_args.Count -gt 0` ガードと揃える)
@@ -367,6 +403,10 @@ let c = json_add("[1,2]", "k", "v")
 print "c=[{c}]"
 let d = json_add("\{\"a\":1\}", "k", "va\"l\\ue")
 print "d=[{d}]"
+let e = json_add("not-an-object\}", "k", "v")
+print "e=[{e}]"
+let f = json_add("  \{ \}", "k", "v")
+print "f=[{f}]"
 "#;
     let script = build_temp(src);
     let (out, code) = run_both(&script, &[]);
@@ -377,9 +417,24 @@ print "d=[{d}]"
             "b=[{\"k\":\"v\"}]\n",
             // top-level オブジェクトでなければ手を付けない
             "c=[[1,2]]\n",
-            "d=[{\"a\":1,\"k\":\"va\\\"l\\\\ue\"}]\n"
+            "d=[{\"a\":1,\"k\":\"va\\\"l\\\\ue\"}]\n",
+            "e=[not-an-object}]\n",
+            "f=[  {\"k\":\"v\"}]\n"
         )
     );
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn for_each_materializes_list_values_before_iteration() {
+    let src = concat!(
+        "for item in [json_add(\"\\{\\}\", \"k\", \"v\")] {\n",
+        "  print \"item=[{item}]\"\n",
+        "}\n",
+    );
+    let script = build_temp(src);
+    let (out, code) = run_both(&script, &[]);
+    assert_eq!(out, "item=[{\"k\":\"v\"}]\n");
     assert_eq!(code, 0);
 }
 

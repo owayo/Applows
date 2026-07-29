@@ -202,33 +202,9 @@ impl Lowerer {
                 }
                 Ok(None) // 定義は collect_funcs / lower_func で処理済み
             }
-            Stmt::Let { name, value, span } => {
-                let (val, ty) = self.lower_value(value, scope, fn_index)?;
-                if !matches!(ty, Type::Text | Type::Int) {
-                    return Err(Diagnostic::error(
-                        format!("`{}` 型の値は変数へ代入できません", ty.describe()),
-                        *span,
-                    )
-                    .with_note("代入できるのは Text / Int のみ"));
-                }
-                let slot = match scope.vars.get(name) {
-                    Some(info) => info.slot.clone(),
-                    None => self.fresh_var(),
-                };
-                // 無条件の再代入は型を確定させるので diverged 状態を解除する
-                scope.diverged.remove(name);
-                scope.vars.insert(
-                    name.clone(),
-                    VarInfo {
-                        slot: slot.clone(),
-                        ty,
-                    },
-                );
-                Ok(Some(IrStmt::Let {
-                    var: slot,
-                    value: val,
-                }))
-            }
+            Stmt::Let { name, value, span } => self
+                .lower_let(name, value, *span, scope, fn_index)
+                .map(Some),
             Stmt::Print { value, span } => {
                 let (val, ty) = self.lower_value(value, scope, fn_index)?;
                 if !matches!(ty, Type::Text | Type::Int) {
@@ -253,133 +229,20 @@ impl Lowerer {
                 branches,
                 otherwise,
                 ..
-            } => {
-                // 分岐で代入される変数には共通 slot を事前割り当てし、全分岐で同一 slot を
-                // 共有させる。これにより「全分岐が同型を代入する変数」を合流後に使え (仕様の
-                // `if{let s="a"}else{let s="b"}` パターン)、かつ再代入時の slot 分離も防ぐ。
-                let mut assigned = Vec::new();
-                let mut assigned_seen = HashSet::new();
-                for b in branches {
-                    collect_block_assigned_names(&b.body, &mut assigned, &mut assigned_seen);
-                }
-                if let Some(e) = otherwise {
-                    collect_block_assigned_names(e, &mut assigned, &mut assigned_seen);
-                }
-                for name in &assigned {
-                    self.preallocate_slot(name, scope);
-                }
-
-                // 各分岐を親スコープのクローン上で処理し、合流時に型を照合する。
-                // (全パスで型が一致しない/未定義パスがある変数は「diverged」とし使用禁止)
-                let before = scope.clone();
-                let mut ir_branches = Vec::new();
-                let mut path_scopes: Vec<Scope> = Vec::new();
-                for b in branches {
-                    // 条件は「どの分岐本体も未実行」の状態 (= before) で評価される
-                    let cond = self.lower_cond(&b.cond, scope, fn_index, false)?;
-                    let mut branch_scope = before.clone();
-                    let body = self.lower_block(&b.body, &mut branch_scope, fn_index, false);
-                    path_scopes.push(branch_scope);
-                    ir_branches.push((cond, body));
-                }
-                let otherwise = match otherwise {
-                    Some(b) => {
-                        let mut else_scope = before.clone();
-                        let body = self.lower_block(b, &mut else_scope, fn_index, false);
-                        path_scopes.push(else_scope);
-                        Some(body)
-                    }
-                    None => {
-                        // else が無い = 「どの分岐にも入らない」パスがあり、変数は before のまま
-                        path_scopes.push(before.clone());
-                        None
-                    }
-                };
-                *scope = merge_branch_scopes(&before, &path_scopes);
-                Ok(Some(IrStmt::If {
-                    branches: ir_branches,
-                    otherwise,
-                }))
-            }
-            Stmt::While { cond, body, span } => {
-                let cond = self.lower_cond(cond, scope, fn_index, false)?;
-                // ループ本体はクローン上で処理し、代入された変数は while 後 diverged 扱いにする
-                // (0 回実行の可能性があるため、本体で作られた型を後段で当てにできない)
-                let before = scope.clone();
-                let mut body_scope = before.clone();
-                let body = self.lower_block(body, &mut body_scope, fn_index, false);
-                // ループ不変条件: 本体は 1 回だけ lowering されるが実行時は複数回回るため、
-                // ループ前から在る変数の型を本体が変えると 2 周目以降にコード生成の前提が崩れる
-                // (算術・比較・補間で破綻)。ループ前変数の型が本体で変わっていたらエラーにする。
-                if let Some((name, bt, at)) = loop_retyped_var(&before, &body_scope) {
-                    return Err(loop_invariant_error(&name, bt, at, *span));
-                }
-                *scope = merge_branch_scopes(&before, &[body_scope, before.clone()]);
-                Ok(Some(IrStmt::While { cond, body }))
-            }
+            } => self
+                .lower_if(branches, otherwise.as_deref(), scope, fn_index)
+                .map(Some),
+            Stmt::While { cond, body, span } => self
+                .lower_while(cond, body, *span, scope, fn_index)
+                .map(Some),
             Stmt::For {
                 var,
                 iter,
                 body,
                 span,
-            } => {
-                // ループは 0 回実行され得る (空リスト / start>end) ため、本体はクローン上で
-                // 処理し、本体で作られた型を while と同様に合流時 diverged 扱いにする。
-                let before = scope.clone();
-                let (ir, body_scope) = match iter {
-                    ForIter::Range { start, end } => {
-                        let (s, st) = self.lower_value(start, scope, fn_index)?;
-                        self.expect(st, Type::Int, start.span())?;
-                        let (e, et) = self.lower_value(end, scope, fn_index)?;
-                        self.expect(et, Type::Int, end.span())?;
-                        let mut body_scope = before.clone();
-                        let slot = self.declare_loop_var(var, Type::Int, &mut body_scope);
-                        let body = self.lower_block(body, &mut body_scope, fn_index, false);
-                        // ループ変数は隠しカウンタから毎周代入されるため、本体での再代入は
-                        // 反復に影響しない (次周で上書き)。よって型変更のチェックは不要。
-                        (
-                            IrStmt::ForRange {
-                                var: slot,
-                                start: s,
-                                end: e,
-                                body,
-                            },
-                            body_scope,
-                        )
-                    }
-                    ForIter::Each(list_expr) => {
-                        let list = self.lower_list(list_expr, scope, fn_index)?;
-                        // for-each のリスト要素に副作用のある呼び出しは書けない (反復子は 1 度だけ
-                        // 評価される想定で、emit 側も要素の副作用を実行しないため)。
-                        if let List::Literal(items) = &list
-                            && items.iter().any(value_has_side_effect)
-                        {
-                            return Err(Diagnostic::error(
-                                "for のリスト要素に副作用のある呼び出し (run / http_download / 関数呼び出し) は書けません",
-                                list_expr.span(),
-                            )
-                            .with_note("先に `let` で結果を受けてからリテラルに入れる"));
-                        }
-                        let mut body_scope = before.clone();
-                        let slot = self.declare_loop_var(var, Type::Text, &mut body_scope);
-                        let body = self.lower_block(body, &mut body_scope, fn_index, false);
-                        (
-                            IrStmt::ForEach {
-                                var: slot,
-                                list,
-                                body,
-                            },
-                            body_scope,
-                        )
-                    }
-                };
-                // while と同じループ不変条件: ループ前変数の型を本体が変えていないこと
-                if let Some((name, bt, at)) = loop_retyped_var(&before, &body_scope) {
-                    return Err(loop_invariant_error(&name, bt, at, *span));
-                }
-                *scope = merge_branch_scopes(&before, &[body_scope, before.clone()]);
-                Ok(Some(ir))
-            }
+            } => self
+                .lower_for(var, iter, body, *span, scope, fn_index)
+                .map(Some),
             Stmt::Return { value, span } => {
                 if fn_index.is_none() {
                     return Err(Diagnostic::error("`return` は関数内でのみ使えます", *span));
@@ -400,6 +263,175 @@ impl Lowerer {
                 Ok(Some(IrStmt::Exit { code: v }))
             }
         }
+    }
+
+    fn lower_let(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        span: Span,
+        scope: &mut Scope,
+        fn_index: Option<usize>,
+    ) -> Result<IrStmt, Diagnostic> {
+        let (value, ty) = self.lower_value(value, scope, fn_index)?;
+        if !matches!(ty, Type::Text | Type::Int) {
+            return Err(Diagnostic::error(
+                format!("`{}` 型の値は変数へ代入できません", ty.describe()),
+                span,
+            )
+            .with_note("代入できるのは Text / Int のみ"));
+        }
+        let slot = match scope.vars.get(name) {
+            Some(info) => info.slot.clone(),
+            None => self.fresh_var(),
+        };
+        // 無条件の再代入は型を確定させるので diverged 状態を解除する。
+        scope.diverged.remove(name);
+        scope.vars.insert(
+            name.to_string(),
+            VarInfo {
+                slot: slot.clone(),
+                ty,
+            },
+        );
+        Ok(IrStmt::Let { var: slot, value })
+    }
+
+    fn lower_if(
+        &mut self,
+        branches: &[Branch],
+        otherwise: Option<&[Stmt]>,
+        scope: &mut Scope,
+        fn_index: Option<usize>,
+    ) -> Result<IrStmt, Diagnostic> {
+        // 分岐で代入される変数には共通 slot を事前割り当てし、全分岐で同一 slot を
+        // 共有させる。これにより全分岐が同型を代入する変数を合流後に使用できる。
+        let mut assigned = Vec::new();
+        let mut assigned_seen = HashSet::new();
+        for branch in branches {
+            collect_block_assigned_names(&branch.body, &mut assigned, &mut assigned_seen);
+        }
+        if let Some(body) = otherwise {
+            collect_block_assigned_names(body, &mut assigned, &mut assigned_seen);
+        }
+        for name in &assigned {
+            self.preallocate_slot(name, scope);
+        }
+
+        // 各分岐を親スコープのクローン上で処理し、合流時に型を照合する。
+        let before = scope.clone();
+        let mut ir_branches = Vec::new();
+        let mut path_scopes = Vec::new();
+        for branch in branches {
+            // 条件はどの分岐本体も未実行の状態で評価する。
+            let cond = self.lower_cond(&branch.cond, scope, fn_index, false)?;
+            let mut branch_scope = before.clone();
+            let body = self.lower_block(&branch.body, &mut branch_scope, fn_index, false);
+            path_scopes.push(branch_scope);
+            ir_branches.push((cond, body));
+        }
+        let otherwise = match otherwise {
+            Some(body) => {
+                let mut else_scope = before.clone();
+                let body = self.lower_block(body, &mut else_scope, fn_index, false);
+                path_scopes.push(else_scope);
+                Some(body)
+            }
+            None => {
+                // else が無い場合は、どの分岐にも入らないパスを合流対象に加える。
+                path_scopes.push(before.clone());
+                None
+            }
+        };
+        *scope = merge_branch_scopes(&before, &path_scopes);
+        Ok(IrStmt::If {
+            branches: ir_branches,
+            otherwise,
+        })
+    }
+
+    fn lower_while(
+        &mut self,
+        cond: &Expr,
+        body: &[Stmt],
+        span: Span,
+        scope: &mut Scope,
+        fn_index: Option<usize>,
+    ) -> Result<IrStmt, Diagnostic> {
+        let cond = self.lower_cond(cond, scope, fn_index, false)?;
+        // 0 回実行の可能性があるため、本体で作られた型を後段で当てにしない。
+        let before = scope.clone();
+        let mut body_scope = before.clone();
+        let body = self.lower_block(body, &mut body_scope, fn_index, false);
+        // 実行時に複数回回る本体が既存変数の型を変えると、2 周目に生成前提が崩れる。
+        if let Some((name, before_ty, after_ty)) = loop_retyped_var(&before, &body_scope) {
+            return Err(loop_invariant_error(&name, before_ty, after_ty, span));
+        }
+        *scope = merge_branch_scopes(&before, &[body_scope, before.clone()]);
+        Ok(IrStmt::While { cond, body })
+    }
+
+    fn lower_for(
+        &mut self,
+        var: &str,
+        iter: &ForIter,
+        body: &[Stmt],
+        span: Span,
+        scope: &mut Scope,
+        fn_index: Option<usize>,
+    ) -> Result<IrStmt, Diagnostic> {
+        // 空リストや start > end では 0 回になり得るため、本体はクローン上で処理する。
+        let before = scope.clone();
+        let (ir, body_scope) = match iter {
+            ForIter::Range { start, end } => {
+                let (start_value, start_ty) = self.lower_value(start, scope, fn_index)?;
+                self.expect(start_ty, Type::Int, start.span())?;
+                let (end_value, end_ty) = self.lower_value(end, scope, fn_index)?;
+                self.expect(end_ty, Type::Int, end.span())?;
+                let mut body_scope = before.clone();
+                let slot = self.declare_loop_var(var, Type::Int, &mut body_scope);
+                let body = self.lower_block(body, &mut body_scope, fn_index, false);
+                // 反復変数は隠しカウンタから毎周代入するため、本体での再代入は反復に影響しない。
+                (
+                    IrStmt::ForRange {
+                        var: slot,
+                        start: start_value,
+                        end: end_value,
+                        body,
+                    },
+                    body_scope,
+                )
+            }
+            ForIter::Each(list_expr) => {
+                let list = self.lower_list(list_expr, scope, fn_index)?;
+                // 副作用の評価順を反復構文へ持ち込まず、先に let で明示させる。
+                if let List::Literal(items) = &list
+                    && items.iter().any(value_has_side_effect)
+                {
+                    return Err(Diagnostic::error(
+                        "for のリスト要素に副作用のある呼び出し (run / run_capture / read_stdin / http_download / http_post / 関数呼び出し) は書けません",
+                        list_expr.span(),
+                    )
+                    .with_note("先に `let` で結果を受けてからリテラルに入れる"));
+                }
+                let mut body_scope = before.clone();
+                let slot = self.declare_loop_var(var, Type::Text, &mut body_scope);
+                let body = self.lower_block(body, &mut body_scope, fn_index, false);
+                (
+                    IrStmt::ForEach {
+                        var: slot,
+                        list,
+                        body,
+                    },
+                    body_scope,
+                )
+            }
+        };
+        if let Some((name, before_ty, after_ty)) = loop_retyped_var(&before, &body_scope) {
+            return Err(loop_invariant_error(&name, before_ty, after_ty, span));
+        }
+        *scope = merge_branch_scopes(&before, &[body_scope, before.clone()]);
+        Ok(ir)
     }
 
     fn declare_loop_var(&mut self, name: &str, ty: Type, scope: &mut Scope) -> String {
@@ -811,7 +843,7 @@ impl Lowerer {
                 // 判定前に必ず実行されてしまう。let で受けてから比較させる。
                 if compound && (value_has_side_effect(&l) || value_has_side_effect(&r)) {
                     return Err(Diagnostic::error(
-                        "and/or/not の内側に副作用のある呼び出し (run / read_stdin / http_download / http_post / 関数呼び出し) は書けません",
+                        "and/or/not の内側に副作用のある呼び出し (run / run_capture / read_stdin / http_download / http_post / 関数呼び出し) は書けません",
                         *span,
                     )
                     .with_note("`let c = run([...])` で受けてから `c == 0` を条件に使う (条件は短絡評価されないため)"));

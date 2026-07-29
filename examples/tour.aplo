@@ -52,7 +52,7 @@ if code == 0 {
 
 # 標準出力を値として使いたいときは run_capture。
 # 終了コード 0 のときだけ stdout を返し、失敗すれば第 2 引数の default になる
-let captured = run_capture(["printf", "%s", "from run_capture"], "(unavailable)")
+let captured = run_capture(["git", "--version"], "(git unavailable)")
 print "captured={captured}"
 
 # スクリプト自身の位置と作業ディレクトリ

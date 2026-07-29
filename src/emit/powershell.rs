@@ -140,12 +140,16 @@ impl Ps {
                 self.indent += 1;
                 self.line(&format!("${var} = {counter}"));
                 self.emit_stmts(body);
+                // 終端値で先に抜け、i64::MAX の次を計算するオーバーフローを防ぐ。
+                self.line(&format!("if ({counter} -eq {end_tmp}) {{ break }}"));
                 self.line(&format!("{counter} = {counter} + 1"));
                 self.indent -= 1;
                 self.line("}");
             }
             IrStmt::ForEach { var, list, body } => {
-                let items = self.render_list(list);
+                let mut pre = Vec::new();
+                let items = self.render_list(list, &mut pre);
+                self.emit_pre(&pre);
                 self.line(&format!("foreach (${var} in {items}) {{"));
                 self.indent += 1;
                 self.emit_stmts(body);
@@ -292,13 +296,21 @@ impl Ps {
                 ps_arith(*op, &l, &r)
             }
             Value::Run { argv } => {
-                let cmd = self.render_argv(argv, pre);
                 let t = self.fresh_temp();
-                // コマンドが見つからない等の起動失敗は sh では終了コード 127 で継続する。
-                // PS は $ErrorActionPreference='Stop' で例外→全体終了になるため局所 catch で 127 に揃える。
-                pre.push(format!(
-                    "try {{ {cmd}; {t} = $LASTEXITCODE }} catch {{ {t} = 127 }}"
-                ));
+                match argv {
+                    List::Literal(_) => {
+                        let cmd = self.render_argv(argv, pre);
+                        // 起動失敗は sh の終了コード 127 に揃える。
+                        pre.push(format!(
+                            "try {{ {cmd}; {t} = $LASTEXITCODE }} catch {{ {t} = 127 }}"
+                        ));
+                    }
+                    List::Args => {
+                        pre.push(format!(
+                            "if ($__ap_args.Count -gt 0) {{ try {{ & $__ap_args[0] @($__ap_args | Select-Object -Skip 1); {t} = $LASTEXITCODE }} catch {{ {t} = 127 }} }} else {{ {t} = 127 }}"
+                        ));
+                    }
+                }
                 t
             }
             Value::RunCapture { argv, default } => {
@@ -317,7 +329,7 @@ impl Ps {
                         pre.push("  $global:LASTEXITCODE = 0".to_string());
                         pre.push(format!("  {raw} = ({cmd} 2>$null)"));
                         pre.push(format!(
-                            "  if ($LASTEXITCODE -eq 0) {{ {t} = (({raw} -join \"`n\").Replace(\"`r\", '')).TrimEnd(\"`n\") }}"
+                            "  if ($LASTEXITCODE -eq 0) {{ {t} = (({raw} -join \"`n\").Replace([string][char]0, '').Replace(\"`r\", '')).TrimEnd(\"`n\") }}"
                         ));
                         pre.push("} catch { }".to_string());
                     }
@@ -330,7 +342,7 @@ impl Ps {
                             "    {raw} = (& $__ap_args[0] @($__ap_args | Select-Object -Skip 1) 2>$null)"
                         ));
                         pre.push(format!(
-                            "    if ($LASTEXITCODE -eq 0) {{ {t} = (({raw} -join \"`n\").Replace(\"`r\", '')).TrimEnd(\"`n\") }}"
+                            "    if ($LASTEXITCODE -eq 0) {{ {t} = (({raw} -join \"`n\").Replace([string][char]0, '').Replace(\"`r\", '')).TrimEnd(\"`n\") }}"
                         ));
                         pre.push("  } catch { }".to_string());
                         pre.push("}".to_string());
@@ -424,6 +436,8 @@ impl Ps {
                 let ev = self.fresh_temp();
                 let base = self.fresh_temp();
                 let inner = self.fresh_temp();
+                let lead = self.fresh_temp();
+                let rest = self.fresh_temp();
                 let out = self.fresh_temp();
 
                 pre.push(format!("{ek} = {}", json_escape_expr(&key)));
@@ -438,14 +452,20 @@ impl Ps {
                 pre.push(format!(
                     "  {inner} = {base}.Substring(0, {base}.Length - 1).TrimEnd()"
                 ));
-                pre.push(format!("  if ({inner} -ceq '{{') {{"));
+                pre.push(format!("  {lead} = {inner}.TrimStart()"));
+                pre.push(format!("  if ({lead}.StartsWith('{{')) {{"));
+                pre.push(format!("    {rest} = {lead}.Substring(1).Trim()"));
+                pre.push(format!("    if ({rest}.Length -eq 0) {{"));
                 pre.push(format!(
-                    "    {out} = ('{{\"' + {ek} + '\":\"' + {ev} + '\"}}')"
+                    "      {out} = ({inner} + '\"' + {ek} + '\":\"' + {ev} + '\"}}')"
                 ));
+                pre.push("    } else {".to_string());
+                pre.push(format!(
+                    "      {out} = ({inner} + ',\"' + {ek} + '\":\"' + {ev} + '\"}}')"
+                ));
+                pre.push("    }".to_string());
                 pre.push("  } else {".to_string());
-                pre.push(format!(
-                    "    {out} = ({inner} + ',\"' + {ek} + '\":\"' + {ev} + '\"}}')"
-                ));
+                pre.push(format!("    {out} = {base}"));
                 pre.push("  }".to_string());
                 pre.push("} else {".to_string());
                 // 末尾が } でない = top-level オブジェクトではないので手を付けない
@@ -504,7 +524,7 @@ impl Ps {
     ) -> String {
         let url = self.materialize(url, pre);
         let body = self.materialize(body, pre);
-        let items = self.render_list(headers);
+        let items = self.render_list(headers, pre);
         let t = self.fresh_temp();
         let b = self.fresh_temp();
         let h = self.fresh_temp();
@@ -560,14 +580,10 @@ impl Ps {
         }
     }
 
-    fn render_list(&mut self, list: &List) -> String {
+    fn render_list(&mut self, list: &List, pre: &mut Vec<String>) -> String {
         match list {
             List::Literal(items) => {
-                let mut pre = Vec::new();
-                let words: Vec<String> = items
-                    .iter()
-                    .map(|v| self.materialize(v, &mut pre))
-                    .collect();
+                let words: Vec<String> = items.iter().map(|v| self.materialize(v, pre)).collect();
                 format!("@({})", words.join(", "))
             }
             List::Args => "$__ap_args".to_string(),
